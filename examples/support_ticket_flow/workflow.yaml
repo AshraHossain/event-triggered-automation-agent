@@ -1,0 +1,67 @@
+# Support Ticket Automation Workflow
+# Triggered when a new support ticket is created.
+# Actions: classify ticket (AI stub) → assign owner (function) → send ack email (HTTP).
+# Retry: workflow-level default retry policy.
+# DLQ: SQLite-backed (stubbed) for tickets that cannot be processed.
+
+id: support-ticket-flow
+name: Support Ticket Automation
+description: >
+  When a new support ticket arrives, automatically classify its topic using AI,
+  assign it to the right owner, and send an acknowledgment email to the requester.
+
+triggers:
+  - source: support_system
+    type: ticket_created
+
+actions:
+  - id: classify_ticket
+    type: ai
+    config:
+      provider: stub
+      model: gpt-4o-mini
+      prompt: "Classify this support ticket into one of: billing, technical, account, general. Return only the category name.\nTicket: {{payload.description}}"
+      max_tokens: 20
+    depends_on: []
+
+  - id: assign_owner
+    type: function
+    config:
+      module_path: examples.support_ticket_flow.handlers.assign_owner
+    depends_on:
+      - classify_ticket
+
+  - id: send_ack_email
+    type: http
+    config:
+      method: POST
+      url: "https://api.example.com/emails/send"
+      headers:
+        Authorization: "Bearer support_token"
+        Content-Type: "application/json"
+      body:
+        to: "{{payload.requester_email}}"
+        subject: "We received your support ticket"
+        body: "Thank you for contacting us. Your ticket has been categorized as {{context.classification}} and assigned to our team."
+      timeout: 10
+      expected_status_codes: [200, 201]
+    depends_on:
+      - assign_owner
+    retry_policy:
+      max_attempts: 2
+      backoff_strategy: fixed
+      backoff_seconds: 1.0
+      retryable_error_codes: [429, 500, "timeout"]
+
+retry_policy:
+  max_attempts: 3
+  backoff_strategy: exponential
+  backoff_seconds: 0.5
+
+dlq:
+  target_type: db
+  target_config:
+    table_name: dlq_support_tickets
+    db_path: ./data/dlq/support.db
+  include_payload: true
+  include_error: true

@@ -1,0 +1,59 @@
+# Payment Webhook Workflow
+# Triggered by Stripe-like payment_succeeded events.
+# Actions: notify email service (HTTP) → update CRM (function).
+# Retry: exponential backoff for email; DLQ writes failed events to /tmp/etaa_payment_dlq.jsonl
+
+id: payment-webhook
+name: Payment Webhook Processing
+description: >
+  Processes Stripe payment_succeeded events by notifying the email service
+  and updating the CRM system.  Retries with exponential backoff on transient failures.
+  Failed events after max attempts are written to the DLQ file.
+
+triggers:
+  - source: stripe
+    type: payment_succeeded
+    filters:
+      success: true
+
+actions:
+  - id: notify_email
+    type: http
+    config:
+      method: POST
+      url: "https://api.example.com/notifications/email"
+      headers:
+        Authorization: "Bearer {{source}}_token"
+        Content-Type: "application/json"
+      body:
+        to: "{{payload.customer_email}}"
+        subject: "Payment received — Invoice #{{payload.invoice_id}}"
+        body: "Your payment of {{payload.amount}} {{payload.currency}} was successful."
+      timeout: 15
+      expected_status_codes: [200, 201]
+    retry_policy:
+      max_attempts: 3
+      backoff_strategy: exponential
+      backoff_seconds: 1.0
+      retryable_error_codes: [429, 500, 502, 503, "timeout"]
+
+  - id: update_crm
+    type: function
+    config:
+      module_path: examples.payment_webhook.handlers.update_crm
+      args: []
+    depends_on:
+      - notify_email
+
+retry_policy:
+  max_attempts: 3
+  backoff_strategy: exponential
+  backoff_seconds: 1.0
+  retryable_error_codes: [429, 500, 502, 503, "timeout"]
+
+dlq:
+  target_type: file
+  target_config:
+    path: ./data/dlq/payment.jsonl
+  include_payload: true
+  include_error: true
