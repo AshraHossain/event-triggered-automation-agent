@@ -257,6 +257,7 @@ class AttemptRecord(BaseModel):
     status: str  # "success" | "failed"
     error: str | None = None
     response: dict[str, Any] | None = None
+    dlq_routed: bool = False
 
 
 class RunRecord(BaseModel):

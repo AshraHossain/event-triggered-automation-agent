@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
+import time
 
 import pytest
 from fastapi.testclient import TestClient
 
+from etaa.ingress import sign
 from etaa.models import ActionKind, ActionSpec, WorkflowSpec, WorkflowTrigger
 
 pytestmark = pytest.mark.integration
@@ -25,8 +25,13 @@ def _queue_wf(wf_id: str, source: str, etype: str) -> WorkflowSpec:
     )
 
 
-def _sign(secret: str, raw: bytes) -> str:
-    return "sha256=" + hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
+def _signed_headers(secret: str, raw: bytes, ts: str | None = None) -> dict[str, str]:
+    ts = ts or str(int(time.time()))
+    return {
+        "X-ETAA-Signature": sign(secret, ts, raw),
+        "X-ETAA-Timestamp": ts,
+        "Content-Type": "application/json",
+    }
 
 
 def test_health_reports_workflow_count(app_env):
@@ -83,7 +88,7 @@ def test_valid_signature_accepted(app_env, monkeypatch):
     resp = client.post(
         "/api/v1/webhook/stripe",
         content=raw,
-        headers={"X-ETAA-Signature": _sign("shh", raw), "Content-Type": "application/json"},
+        headers=_signed_headers("shh", raw),
     )
     assert resp.status_code == 200
     assert resp.json()["runs"] == ["success"]
@@ -135,3 +140,54 @@ def test_workflows_and_metrics_endpoints(app_env):
     assert client.get("/api/v1/workflows").status_code == 200
     assert client.get("/api/v1/metrics").status_code == 200
     assert client.get("/api/v1/runs").status_code == 200
+
+
+def test_stale_signed_request_rejected(app_env, monkeypatch):
+    monkeypatch.setenv("ETAA_WEBHOOK_SECRET_STRIPE", "shh")
+    app, _, _ = app_env
+    raw = b'{"id": "e1", "type": "evt"}'
+    stale = str(int(time.time()) - 3600)
+    resp = TestClient(app).post(
+        "/api/v1/webhook/stripe", content=raw, headers=_signed_headers("shh", raw, stale)
+    )
+    assert resp.status_code == 401
+
+
+def test_oversized_body_returns_413(app_env, monkeypatch):
+    monkeypatch.setenv("ETAA_MAX_BODY_BYTES", "64")
+    app, _, _ = app_env
+    resp = TestClient(app).post("/api/v1/webhook/stripe", json={"id": "e1", "pad": "x" * 200})
+    assert resp.status_code == 413
+
+
+def test_rate_limit_returns_429(app_env, monkeypatch):
+    monkeypatch.setenv("ETAA_RATE_LIMIT_PER_MINUTE", "2")
+    app, _, _ = app_env
+    client = TestClient(app)
+    codes = [client.post("/api/v1/webhook/s", json={"id": f"e{i}"}).status_code for i in range(3)]
+    assert codes == [200, 200, 429]
+
+
+def test_read_endpoints_require_api_key_when_configured(app_env, monkeypatch):
+    monkeypatch.setenv("ETAA_API_KEY", "k3y")
+    app, _, _ = app_env
+    client = TestClient(app)
+    assert client.get("/api/v1/runs").status_code == 401
+    assert client.get("/api/v1/metrics", headers={"X-API-Key": "wrong"}).status_code == 401
+    assert client.get("/api/v1/runs", headers={"X-API-Key": "k3y"}).status_code == 200
+    assert (
+        client.get("/api/v1/workflows", headers={"Authorization": "Bearer k3y"}).status_code == 200
+    )
+    assert client.get("/api/v1/health").status_code == 200  # health stays open
+
+
+def test_runs_and_prometheus_reflect_this_apps_stores(app_env):
+    app, router, _ = app_env
+    router.add_workflow(_queue_wf("wf", "stripe", "evt"))
+    client = TestClient(app)
+    client.post("/api/v1/webhook/stripe", json={"id": "e1", "type": "evt"})
+    runs = client.get("/api/v1/runs").json()
+    assert [r["status"] for r in runs] == ["success"]  # one row per run, not two
+    text = client.get("/api/v1/metrics/prometheus").text
+    assert 'etaa_success_count{workflow="wf"} 1' in text
+    assert client.get("/api/v1/runs?limit=9999").status_code == 422

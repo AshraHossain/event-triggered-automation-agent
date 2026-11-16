@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import hashlib
-import hmac
+import time
 
 import pytest
 
 from etaa.actions import ActionError, FunctionAction
 from etaa.ingress import (
     resolve_source,
+    sign,
     signing_enabled,
     unsigned_sources,
     verify_signature,
@@ -47,11 +47,27 @@ async def test_function_custom_allowlist_prefix(event, monkeypatch):
 
 
 def test_verify_signature_roundtrip():
-    secret, body = "shh", b'{"a":1}'
-    sig = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
-    assert verify_signature(secret, body, sig) is True
-    assert verify_signature(secret, body, "sha256=bad") is False
-    assert verify_signature(secret, body, None) is False
+    secret, body, ts = "shh", b'{"a":1}', str(int(time.time()))
+    sig = sign(secret, ts, body)
+    assert verify_signature(secret, body, sig, ts) is True
+    assert verify_signature(secret, body, "sha256=bad", ts) is False
+    assert verify_signature(secret, body, None, ts) is False
+    assert verify_signature(secret, body, sig, None) is False
+    assert verify_signature(secret, body, sig, "not-a-number") is False
+
+
+def test_verify_signature_rejects_replay():
+    """A correctly signed request outside the tolerance window is rejected."""
+    secret, body = "shh", b"{}"
+    stale = str(int(time.time()) - 3600)
+    assert verify_signature(secret, body, sign(secret, stale, body), stale) is False
+
+
+def test_signature_binds_timestamp():
+    """Re-stamping a captured request with a fresh timestamp must fail."""
+    secret, body = "shh", b"{}"
+    old, fresh = str(int(time.time()) - 60), str(int(time.time()))
+    assert verify_signature(secret, body, sign(secret, old, body), fresh) is False
 
 
 def test_webhook_secret_precedence(monkeypatch):

@@ -33,7 +33,8 @@ class MetricsStore:
     def __init__(self, persist_path: str | None = None) -> None:
         self._lock = threading.Lock()
         self._counters: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
-        self._latencies: dict[str, list[float]] = defaultdict(list)
+        # Running [count, total, min, max] per workflow: bounded memory on a long-lived server.
+        self._latencies: dict[str, list[float]] = {}
         self._persist_path = persist_path
         self._conn: sqlite3.Connection | None = None
         if persist_path:
@@ -66,7 +67,19 @@ class MetricsStore:
 
     def record_latency(self, workflow_id: str, elapsed_seconds: float) -> None:
         with self._lock:
-            self._latencies[workflow_id].append(elapsed_seconds)
+            agg = self._latencies.get(workflow_id)
+            if agg is None:
+                self._latencies[workflow_id] = [
+                    1,
+                    elapsed_seconds,
+                    elapsed_seconds,
+                    elapsed_seconds,
+                ]
+            else:
+                agg[0] += 1
+                agg[1] += elapsed_seconds
+                agg[2] = min(agg[2], elapsed_seconds)
+                agg[3] = max(agg[3], elapsed_seconds)
         if self._conn:
             self._flush_latency(workflow_id, elapsed_seconds)
 
@@ -96,14 +109,23 @@ class MetricsStore:
             result: dict[str, Any] = {}
             for wf_id, counters in self._counters.items():
                 stats: dict[str, Any] = dict(counters)
-                lats = self._latencies.get(wf_id, [])
-                if lats:
-                    stats["latency_min"] = min(lats)
-                    stats["latency_avg"] = sum(lats) / len(lats)
-                    stats["latency_max"] = max(lats)
-                    stats["latency_samples"] = len(lats)
+                agg = self._latencies.get(wf_id)
+                if agg:
+                    stats["latency_min"] = agg[2]
+                    stats["latency_avg"] = agg[1] / agg[0]
+                    stats["latency_max"] = agg[3]
+                    stats["latency_samples"] = int(agg[0])
                 result[wf_id] = stats
             return result
+
+    def to_prometheus(self) -> str:
+        """Render the snapshot in the Prometheus text exposition format."""
+        lines: list[str] = []
+        for wf_id, stats in sorted(self.snapshot().items()):
+            label = wf_id.replace("\\", "\\\\").replace('"', '\\"')
+            for name, value in sorted(stats.items()):
+                lines.append(f'etaa_{name}{{workflow="{label}"}} {value}')
+        return "\n".join(lines) + "\n"
 
     def close(self) -> None:
         if self._conn:

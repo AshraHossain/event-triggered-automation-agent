@@ -18,3 +18,4 @@ graphify-out/
 .env
 
 uv.lock
+.claude/scheduled_tasks.lock

@@ -55,6 +55,10 @@ class EventRouter:
             log.info("Removed workflow: %s", workflow_id)
         return removed
 
+    def get_workflow(self, workflow_id: str) -> WorkflowSpec | None:
+        """Return the registered workflow with *workflow_id*, if any."""
+        return next((wf for wf in self._workflows if wf.id == workflow_id), None)
+
     @property
     def workflow_count(self) -> int:
         return len(self._workflows)
