@@ -27,6 +27,7 @@ from etaa.main import build_application
 @dataclass
 class WorkflowStats:
     """Accumulated stats for a single workflow across many runs."""
+
     workflow_id: str
     total_events: int = 0
     success_count: int = 0
@@ -39,28 +40,57 @@ class WorkflowStats:
 
 def generate_sample_events() -> list[dict[str, Any]]:
     """Return a diverse batch of sample events covering all three examples."""
-    return [
-        # Payment events
-        {"id": f"evt-pay-{i}", "source": "stripe", "type": "payment_succeeded", "data": {
-            "customer_id": f"cus_{i}", "customer_email": f"user{i}@example.com",
-            "amount": 1000 + i * 100, "currency": "usd", "invoice_id": f"inv-{i}", "success": True,
-        }}
-        for i in range(1, 51)
-    ] + [
-        # Git push events
-        {"id": f"evt-git-{i}", "source": "github", "type": "push", "data": {
-            "repository": "myorg/webapp", "ref": "refs/heads/main",
-            "head_commit": {"id": f"commit{i:08x}", "message": f"fix #{i}", "author": {"name": f"dev{i}"}},
-        }}
-        for i in range(1, 51)
-    ] + [
-        # Support ticket events
-        {"id": f"evt-tkt-{i}", "source": "support_system", "type": "ticket_created", "data": {
-            "ticket_id": f"TKT-{2000+i}", "requester_email": f"cust{i}@example.com",
-            "description": f"Support request number {i}: something needs fixing.",
-        }}
-        for i in range(1, 51)
-    ]
+    return (
+        [
+            # Payment events
+            {
+                "id": f"evt-pay-{i}",
+                "source": "stripe",
+                "type": "payment_succeeded",
+                "data": {
+                    "customer_id": f"cus_{i}",
+                    "customer_email": f"user{i}@example.com",
+                    "amount": 1000 + i * 100,
+                    "currency": "usd",
+                    "invoice_id": f"inv-{i}",
+                    "success": True,
+                },
+            }
+            for i in range(1, 51)
+        ]
+        + [
+            # Git push events
+            {
+                "id": f"evt-git-{i}",
+                "source": "github",
+                "type": "push",
+                "data": {
+                    "repository": "myorg/webapp",
+                    "ref": "refs/heads/main",
+                    "head_commit": {
+                        "id": f"commit{i:08x}",
+                        "message": f"fix #{i}",
+                        "author": {"name": f"dev{i}"},
+                    },
+                },
+            }
+            for i in range(1, 51)
+        ]
+        + [
+            # Support ticket events
+            {
+                "id": f"evt-tkt-{i}",
+                "source": "support_system",
+                "type": "ticket_created",
+                "data": {
+                    "ticket_id": f"TKT-{2000+i}",
+                    "requester_email": f"cust{i}@example.com",
+                    "description": f"Support request number {i}: something needs fixing.",
+                },
+            }
+            for i in range(1, 51)
+        ]
+    )
 
 
 async def run_benchmark(workflows_dir: str, iterations: int) -> None:
@@ -107,9 +137,11 @@ async def run_benchmark(workflows_dir: str, iterations: int) -> None:
     print("\n" + "=" * 60)
     print("BENCHMARK RESULTS")
     print("=" * 60)
+    total_events = sum(s.total_events for s in all_stats.values())
+    rate = total_events / total_elapsed if total_elapsed else 0.0
     print(f"Total wall-time     : {total_elapsed:.2f}s")
-    print(f"Total events procs  : {sum(s.total_events for s in all_stats.values())}")
-    print(f"Events/sec          : {sum(s.total_events for s in all_stats.values()) / total_elapsed:.1f}")
+    print(f"Total events procs  : {total_events}")
+    print(f"Events/sec          : {rate:.1f}")
     print()
 
     lines = ["## Benchmark Summary", ""]
@@ -121,7 +153,8 @@ async def run_benchmark(workflows_dir: str, iterations: int) -> None:
     for wf_id, s in sorted(all_stats.items()):
         avg_ms = (sum(s.latencies) / len(s.latencies) * 1000) if s.latencies else 0
         lines.append(
-            f"| {wf_id} | {s.total_events} | {s.success_count} | {s.failure_count} | {s.dlq_count} | {s.skipped_count} | {avg_ms:.1f} |"
+            f"| {wf_id} | {s.total_events} | {s.success_count} | {s.failure_count} "
+            f"| {s.dlq_count} | {s.skipped_count} | {avg_ms:.1f} |"
         )
         summary_json["workflows"][wf_id] = {
             "total_events": s.total_events,
@@ -145,8 +178,12 @@ async def run_benchmark(workflows_dir: str, iterations: int) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="ETAA Benchmark Runner")
-    parser.add_argument("--workflows", default="examples", help="Directory with workflow YAML files")
-    parser.add_argument("--iterations", type=int, default=10, help="Number of full-pass iterations")
+    parser.add_argument(
+        "--workflows", default="examples", help="Directory with workflow YAML files"
+    )
+    parser.add_argument(
+        "--iterations", type=int, default=10, help="Number of full-pass iterations"
+    )
     args = parser.parse_args()
     asyncio.run(run_benchmark(args.workflows, args.iterations))
 
