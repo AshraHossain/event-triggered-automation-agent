@@ -16,7 +16,7 @@ description: Use this skill when adding a new declarative workflow action type o
    `etaa/models/__init__.py`.
 4. Register it in `action_registry` inside `build_application` (`etaa/main.py`).
 5. Document it in the README "Workflows" section and add an example if it is user-facing.
-6. `make check`.
+6. Verify (see below).
 
 ## New ingress adapter
 1. Subclass `BaseIngress` in `etaa/ingress/__init__.py`; implement
@@ -25,7 +25,21 @@ description: Use this skill when adding a new declarative workflow action type o
    verification agree.
 2. Add a factory helper and wire it into `etaa/main.py` or a new server module.
 3. Add an offline test (no network).
-4. `make check`.
+4. Verify (see below).
+
+## Verify
+Use the allowlisted exact forms so the checks run without permission prompts:
+
+1. While iterating: `ruff check etaa -q` (lint only, read-only).
+2. To apply fixes: `ruff check . --fix` then `black .` — these rewrite files and will
+   prompt; never append `--fix` to the allowlisted lint commands.
+3. Before committing: `make check` (lint, format, types, security scan, tests with the
+   coverage gate). Run it alone, not chained with other commands.
+4. Before merging or reporting the work as done, run the `enterprise-release-gates` skill
+   and report its gate table (unrun checks are `not verified`).
+5. Commit with `git commit` as its own command (no `grep -n` or other `-n` flag in the same
+   call — the no-verify hook blocks it).
 
 Keep everything offline and deterministic; the only external call is the optional
-`ai` action, which stubs out without `OPENAI_API_KEY`.
+`ai` action with `provider: anthropic` or `openai`. Tests use `provider: stub` or inject
+a fake provider module.

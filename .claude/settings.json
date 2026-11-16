@@ -1,26 +1,33 @@
 {
   "permissions": {
     "allow": [
-      "Bash(gh repo list *)",
-      "Bash(command -v *)",
-      "Bash(env)",
-      "Bash(sysctl -n *)",
-      "Bash(ruff check .)",
-      "Bash(docker info *)",
-      "Bash(gh search *)",
-      "Bash(npm -v)",
-      "Bash(ruff format --check *)",
-      "Bash(pip3 list *)",
       "Bash(black --check *)",
+      "Bash(command -v *)",
+      "Bash(docker info *)",
       "Bash(docker version *)",
+      "Bash(env)",
+      "Bash(gh repo list *)",
+      "Bash(gh search *)",
+      "Bash(graphify --help)",
+      "Bash(make check)",
+      "Bash(npm -v)",
       "Bash(ollama list)",
+      "Bash(pip3 list *)",
       "Bash(printenv)",
-      "mcp__claude-in-chrome__tabs_context_mcp",
-      "mcp__Claude_Browser__read_page",
-      "mcp__Claude_Browser__get_page_text",
+      "Bash(ruff check . -q)",
+      "Bash(ruff check .)",
+      "Bash(ruff check etaa --output-format concise)",
+      "Bash(ruff check etaa -q)",
+      "Bash(ruff check etaa tests --output-format concise)",
+      "Bash(ruff check etaa tests benchmark.py examples --output-format concise)",
+      "Bash(ruff format --check *)",
+      "Bash(sysctl -n *)",
       "mcp__Claude_Browser__find",
+      "mcp__Claude_Browser__get_page_text",
       "mcp__Claude_Browser__read_console_messages",
-      "mcp__ccd_pr__get_status"
+      "mcp__Claude_Browser__read_page",
+      "mcp__ccd_pr__get_status",
+      "mcp__claude-in-chrome__tabs_context_mcp"
     ]
   }
 }
