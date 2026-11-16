@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import os
+import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from typing import Any
@@ -68,16 +69,38 @@ def unsigned_sources() -> set[str]:
     return {s.strip() for s in raw.split(",") if s.strip()}
 
 
-def verify_signature(secret: str, raw_body: bytes, signature: str | None) -> bool:
-    """Return True if *signature* is a valid ``sha256=<hex>`` HMAC of *raw_body*.
+DEFAULT_TOLERANCE_SECONDS = 300
 
-    Comparison is constant-time to avoid timing side channels.
+
+def sign(secret: str, timestamp: str, raw_body: bytes) -> str:
+    """Return the ``sha256=<hex>`` signature for *raw_body* sent at *timestamp*."""
+    message = timestamp.encode() + b"." + raw_body
+    return "sha256=" + hmac.new(secret.encode(), message, hashlib.sha256).hexdigest()
+
+
+def verify_signature(
+    secret: str,
+    raw_body: bytes,
+    signature: str | None,
+    timestamp: str | None,
+    now: float | None = None,
+) -> bool:
+    """Return True if *signature* is valid for *raw_body* and *timestamp* is fresh.
+
+    The timestamp (unix seconds) is part of the signed message and must be
+    within ``ETAA_WEBHOOK_TOLERANCE_SECONDS`` (default 300) of now, so a
+    captured request cannot be replayed later. Comparison is constant-time.
     """
-    if not signature:
+    if not signature or not timestamp:
         return False
-    expected = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
-    provided = signature[7:] if signature.startswith("sha256=") else signature
-    return hmac.compare_digest(expected, provided)
+    try:
+        sent_at = float(timestamp)
+    except ValueError:
+        return False
+    tolerance = float(os.environ.get("ETAA_WEBHOOK_TOLERANCE_SECONDS", DEFAULT_TOLERANCE_SECONDS))
+    if abs((time.time() if now is None else now) - sent_at) > tolerance:
+        return False
+    return hmac.compare_digest(sign(secret, timestamp, raw_body), signature)
 
 
 class BaseIngress(ABC):

@@ -1,7 +1,9 @@
 # Payment Webhook Workflow
 # Triggered by Stripe-like payment_succeeded events.
 # Actions: notify email service (HTTP) → update CRM (function).
-# Retry: exponential backoff for email; DLQ writes failed events to /tmp/etaa_payment_dlq.jsonl
+# Retry: exponential backoff for email; exhausted retries are dead-lettered to
+# ./data/dlq/payment.jsonl (replay with `etaa replay`).
+# Secrets come from the environment ({{env.ETAA_SECRET_*}}), never inline.
 
 id: payment-webhook
 name: Payment Webhook Processing
@@ -23,7 +25,7 @@ actions:
       method: POST
       url: "https://api.example.com/notifications/email"
       headers:
-        Authorization: "Bearer {{source}}_token"
+        Authorization: "Bearer {{env.ETAA_SECRET_EMAIL_TOKEN}}"
         Content-Type: "application/json"
       body:
         to: "{{payload.customer_email}}"

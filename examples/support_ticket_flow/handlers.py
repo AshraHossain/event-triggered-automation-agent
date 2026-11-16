@@ -2,35 +2,26 @@
 
 from __future__ import annotations
 
-import random
 from datetime import UTC, datetime
 from typing import Any
 
 from etaa.models import EventEnvelope
 
-OWNER_POOL = ["alice-support", "bob-tech", "carol-billing", "dave-general"]
+OWNERS = {
+    "billing": "carol-billing",
+    "technical": "bob-tech",
+    "account": "alice-support",
+}
+DEFAULT_OWNER = "dave-general"
 
 
 def assign_owner(event: EventEnvelope, context: dict[str, Any]) -> dict[str, Any]:
-    """Assign a random owner based on the ticket category (from AI classification)."""
-    classification = context.get("classification", "general")
-    # Route by category
-    route = {
-        "billing": "carol-billing",
-        "technical": "bob-tech",
-        "account": "alice-support",
-    }
-    owner = route.get(classification, random.choice(OWNER_POOL))
-
-    result = {
+    """Route the ticket to an owner based on the classification from the AI step."""
+    category = context["steps"].get("classify_ticket", {}).get("classification", "general")
+    return {
         "action": "owner_assigned",
         "ticket_id": event.payload.get("ticket_id", "unknown"),
-        "category": classification,
-        "assigned_to": owner,
+        "category": category,
+        "assigned_to": OWNERS.get(category, DEFAULT_OWNER),
         "assigned_at": datetime.now(UTC).isoformat(),
     }
-    print(
-        f"[Support] Ticket {result['ticket_id']} categorized as "
-        f"'{classification}', assigned to {owner}"
-    )
-    return result

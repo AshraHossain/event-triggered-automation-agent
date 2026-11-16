@@ -20,14 +20,18 @@ If the key exists in the store, skip execution. This works because:
 - `event_id` is unique per event (issued by the producer).
 - `workflow_id` scopes deduplication per workflow (the same event might legitimately trigger different workflows).
 
-ETAA implements this in `IdempotencyManager` with an in-memory TTL store (default 1 hour). For production, replace with Redis `SET NX EX` or a database UNIQUE constraint.
+ETAA implements this in `IdempotencyManager` (default TTL 1 hour). The key is claimed before the run starts, so a concurrent duplicate is skipped, and released if the run fails, so a redelivery or a DLQ replay is processed rather than skipped.
+
+The default store is in-memory. Set `ETAA_IDEMPOTENCY_DB=/path/idempotency.db` for a SQLite store that survives restarts; the claim is an `INSERT OR IGNORE` on a primary key, so it is atomic across processes on one host. For several hosts, back the same interface with Redis `SET NX EX` or a database UNIQUE constraint.
+
+Because a failed run releases its key, a retry re-runs the workflow from its first action: actions should be safe to repeat (at-least-once per action).
 
 ### 2. Retry with Backoff
 
 Transient failures (network timeouts, 503 Service Unavailable, rate limits) should not cause immediate workflow failure. Instead:
 
 1. Catch the error.
-2. Check if the error code is in the `retryable_error_codes` list (empty list = retry everything).
+2. Skip the retry if the error can never succeed (`ActionError(retryable=False)`: bad config, forbidden URL, missing API key). Otherwise check the error code against `retryable_error_codes` (empty list = retry everything).
 3. Wait `backoff_delay` seconds.
 4. Retry up to `max_attempts`.
 5. On exhaustion, route to DLQ.
@@ -56,8 +60,10 @@ When all retries are exhausted, the event must go somewhere — not disappear. T
 
 ETAA supports three DLQ targets:
 - **File** (`target_type: "file"`): append to a JSONL file. Best for local development and debugging.
-- **Queue** (`target_type: "queue"`): push to SQS / RabbitMQ. Best for production decoupling.
-- **DB** (`target_type: "db"`): insert into a SQL table. Best when you need SQL queries over failed events.
+- **DB** (`target_type: "db"`): insert into a SQLite table (`db_path`, `table_name`). Best when you need SQL queries over failed events.
+- **Queue** (`target_type: "queue"`): no broker adapter exists yet, so the event is written to `./data/dlq/<queue_name>.jsonl` with a warning. It is never dropped.
+
+Replay a store with `etaa replay <path> --workflows <dir>`. Processed records are removed; an event that fails again is dead-lettered again.
 
 DLQ records include the original payload and the last error (configurable via `include_payload` / `include_error`).
 
@@ -85,17 +91,19 @@ For each action:
       │
       └─ All attempts exhausted → DLQ routing
            ├─ File: append JSONL
-           ├─ Queue: publish (TODO)
-           └─ DB: insert row (TODO)
+           ├─ DB: insert row (SQLite)
+           └─ Queue: fall back to a JSONL file
+           then release the idempotency key
 ```
 
 Run history (`RunHistoryStore`) persists every execution — status, attempts, latency, action-level detail — enabling post-mortems and replay.
 
 ## Checklist for Production Use
 
-- [ ] Replace `IdempotencyManager` with Redis or DB-backed store
-- [ ] Replace `MetricsStore` with Prometheus / Datadog exporter
-- [ ] Implement real SQS / RabbitMQ / Kafka queue actions
-- [ ] Add DLQ replay tooling (`etaa replay <dlq-file>`)
-- [ ] Set up alerting on `dlq_count` metric
-- [ ] Configure appropriate TTLs (idempotency window vs. DLQ retention)
+- [x] Persistent idempotency store (`ETAA_IDEMPOTENCY_DB`, SQLite)
+- [x] DLQ replay tooling (`etaa replay`)
+- [x] Prometheus metrics endpoint (`/api/v1/metrics/prometheus`)
+- [ ] Shared idempotency store for multi-host deployments (Redis / database)
+- [ ] Real SQS / RabbitMQ / Kafka queue adapters
+- [ ] Alerting on the `dlq_count` metric
+- [ ] Appropriate TTLs (idempotency window vs. DLQ retention)

@@ -2,7 +2,8 @@
 # Triggered when a new support ticket is created.
 # Actions: classify ticket (AI stub) → assign owner (function) → send ack email (HTTP).
 # Retry: workflow-level default retry policy.
-# DLQ: SQLite-backed (stubbed) for tickets that cannot be processed.
+# DLQ: SQLite table for tickets that cannot be processed.
+# The classification is passed forward with {{steps.classify_ticket.classification}}.
 
 id: support-ticket-flow
 name: Support Ticket Automation
@@ -18,9 +19,16 @@ actions:
   - id: classify_ticket
     type: ai
     config:
+      # stub = offline keyword rules. Switch to `anthropic` or `openai` (with the
+      # matching API key) for a real model; the output is still forced into `labels`.
       provider: stub
-      model: gpt-4o-mini
-      prompt: "Classify this support ticket into one of: billing, technical, account, general. Return only the category name.\nTicket: {{payload.description}}"
+      prompt: "Classify this support ticket.\nTicket: {{payload.description}}"
+      labels: [billing, technical, account, general]
+      default_label: general
+      stub_rules:
+        billing: [charged, invoice, refund, payment]
+        account: [password, login, sign in]
+        technical: [error, crash, bug, slow]
       max_tokens: 20
     depends_on: []
 
@@ -37,12 +45,12 @@ actions:
       method: POST
       url: "https://api.example.com/emails/send"
       headers:
-        Authorization: "Bearer support_token"
+        Authorization: "Bearer {{env.ETAA_SECRET_EMAIL_TOKEN}}"
         Content-Type: "application/json"
       body:
         to: "{{payload.requester_email}}"
         subject: "We received your support ticket"
-        body: "Thank you for contacting us. Your ticket has been categorized as {{context.classification}} and assigned to our team."
+        body: "Thank you for contacting us. Your ticket was categorised as {{steps.classify_ticket.classification}} and assigned to {{steps.assign_owner.result.assigned_to}}."
       timeout: 10
       expected_status_codes: [200, 201]
     depends_on:

@@ -37,7 +37,8 @@ class RunHistoryStore:
             self._jsonl_path.parent.mkdir(parents=True, exist_ok=True)
 
     def _connect_db(self, db_path: str) -> None:
-        self._conn = sqlite3.connect(db_path)
+        # Guarded by self._lock, so cross-thread use is safe.
+        self._conn = sqlite3.connect(db_path, check_same_thread=False)
         # Row factory lets _row_to_record read columns by name via dict(row).
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("""
@@ -95,49 +96,47 @@ class RunHistoryStore:
         except Exception as exc:
             log.error("JSONL save failed", exc_info=exc)
 
+    def _jsonl_rows(self) -> list[dict[str, Any]]:
+        """Return the latest saved row per run_id, oldest run first."""
+        if not self._jsonl_path.exists():
+            return []
+        latest: dict[str, dict[str, Any]] = {}
+        for line in self._jsonl_path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                row = json.loads(line)
+                latest[row["run_id"]] = row  # a run is saved at start and at finish
+        return list(latest.values())
+
     def get(self, run_id: str) -> RunRecord | None:
         """Retrieve a single run by ID."""
         with self._lock:
             if self._db_path:
                 cur = self._conn.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,))
                 row = cur.fetchone()
-                if row:
-                    return self._row_to_record(dict(row))
-            else:
-                matched = None
-                for line in self._jsonl_path.read_text(encoding="utf-8").splitlines():
-                    if not line.strip():
-                        continue
-                    rec = json.loads(line)
-                    if rec.get("run_id") == run_id:
-                        matched = self._row_to_record(rec)  # keep last (latest save)
-                return matched
+                return self._row_to_record(dict(row)) if row else None
+            for rec in self._jsonl_rows():
+                if rec["run_id"] == run_id:
+                    return self._row_to_record(rec)
         return None
 
     def list(self, workflow_id: str | None = None, limit: int = 50) -> list[RunRecord]:
-        """List recent runs, optionally filtered by *workflow_id*."""
+        """List recent runs (newest first), optionally filtered by *workflow_id*."""
         with self._lock:
             if self._db_path:
                 sql = "SELECT * FROM runs"
-                params: tuple = ()
+                params: tuple[Any, ...] = ()
                 if workflow_id:
                     sql += " WHERE workflow_id = ?"
                     params = (workflow_id,)
-                sql += f" ORDER BY started_at DESC LIMIT {limit}"
-                cur = self._conn.execute(sql, params)
+                sql += " ORDER BY started_at DESC LIMIT ?"
+                cur = self._conn.execute(sql, (*params, limit))
                 return [self._row_to_record(dict(r)) for r in cur.fetchall()]
-            else:
-                results: list[RunRecord] = []
-                for line in reversed(self._jsonl_path.read_text(encoding="utf-8").splitlines()):
-                    if not line.strip():
-                        continue
-                    rec = json.loads(line)
-                    if workflow_id and rec.get("workflow_id") != workflow_id:
-                        continue
-                    results.append(self._row_to_record(rec))
-                    if len(results) >= limit:
-                        break
-                return results
+            rows = [
+                r
+                for r in reversed(self._jsonl_rows())
+                if not workflow_id or r.get("workflow_id") == workflow_id
+            ]
+            return [self._row_to_record(r) for r in rows[:limit]]
 
     @staticmethod
     def _row_to_record(row: dict[str, Any]) -> RunRecord:

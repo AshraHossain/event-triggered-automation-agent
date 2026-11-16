@@ -3,60 +3,72 @@
 Portable instructions for **Claude Code**, **Antigravity (Gemini)**, and other coding agents.
 
 ## What this project is
-A vendor-agnostic event orchestration engine (`etaa/`). It normalises webhooks and
-queue messages into a canonical `EventEnvelope`, matches them against declarative YAML
-`WorkflowSpec`s, and executes actions with idempotency, configurable retry/backoff, and
-dead-letter-queue (DLQ) routing. Python 3.11+, Pydantic v2, FastAPI, async IO.
+A vendor-agnostic event orchestration engine (`etaa/`). It normalises webhooks and queue
+messages into an `EventEnvelope`, matches them against declarative YAML `WorkflowSpec`s, and
+runs actions with idempotency, retry/backoff, and a replayable dead-letter queue.
+Python 3.11+, Pydantic v2, FastAPI, async IO.
 
 ## Setup & commands
 ```bash
-uv venv && uv pip install -e ".[dev]"   # create .venv and install (do this first)
-uv run pytest -q                         # offline unit + integration suite
-uv run pytest -q --cov=etaa              # with coverage (CI gate: >=80%)
-uv run ruff check . && uv run black --check .   # lint + format
-uv run python benchmark.py               # throughput/latency -> benchmark_results.json
-PYTHONPATH=. uv run python examples/payment_webhook/demo.py   # a demo
-uv run python -m etaa.main server --workflows examples/ --port 8000   # HTTP server
+make install                 # uv venv && uv pip install -e ".[dev]"  (do this first)
+make check                   # ruff, black, mypy, bandit, pip-audit, pytest (coverage >= 90%)
+make test                    # tests only
+make demo                    # offline payment demo
+make benchmark               # writes benchmark_results.json
+uv run etaa server --workflows examples/ --port 8000 --dry-run
+uv run etaa replay data/dlq/payment.jsonl --workflows examples/payment_webhook
 ```
-There is no system-wide `python3.11`; always go through `uv`/`.venv`, never a hardcoded
+There is no system `python3.11`; always go through `uv` / `.venv`, never a hardcoded
 interpreter path.
 
 ## Layout
 - `etaa/models/` — Pydantic schemas (`EventEnvelope`, `WorkflowSpec`, `ActionSpec`, `RetryPolicy`, `DLQConfig`, `RunRecord`).
-- `etaa/engine/` — `EventRouter`, `WorkflowExecutor`, `IdempotencyManager`, `RetryDLQManager`.
-- `etaa/ingress/` — webhook/queue normalisation + the FastAPI server (`webhook_server.py`).
-- `etaa/actions/` — action handlers: HTTP, queue, local function, AI.
-- `etaa/observability/` — JSON logger, metrics store, run-history store (JSONL or SQLite).
-- `examples/` — three end-to-end workflow demos (YAML + handlers + demo script).
-- `tests/` — offline suite (respx-mocked HTTP, in-memory stores).
+- `etaa/engine/` — `EventRouter`, `WorkflowExecutor`, `IdempotencyManager`, `RetryDLQManager`, `dlq.py` (dead-letter store).
+- `etaa/ingress/` — normalisation and signature helpers (`__init__.py`), FastAPI server (`webhook_server.py`).
+- `etaa/actions/` — one module per action type (`http.py`, `queue.py`, `function.py`, `ai.py`), shared types in `base.py`.
+- `etaa/templating.py` — placeholder rendering used by every action.
+- `etaa/observability/` — JSON logger, metrics store, run-history store.
+- `etaa/main.py` — `build_application`, workflow loading, CLI (`server`, `run`, `replay`, `list`, `metrics`).
+- `examples/` — three workflows; demos share `examples/demo_support.py` (mock HTTP transport).
+- `tests/` — offline suite; `conftest.py` provides `make_executor` and `app_env`.
 
 ## Repo-specific rules
-- **Idempotency first**: `WorkflowExecutor` calls `IdempotencyManager.check_and_set`
-  before running any action; duplicates become a `SKIPPED` run with no side effects.
-- **Deterministic core**: retry/backoff math, DLQ routing, and topological ordering live
-  in `etaa/` Python — never inside an LLM prompt. The only LLM call is the optional
-  `ai` action, which falls back to a deterministic stub without `OPENAI_API_KEY`.
-- **Offline tests**: everything under `tests/` must run with no network — mock HTTP with
-  respx and use in-memory stores.
+- **Idempotency first**: `WorkflowExecutor.run_workflow` claims `(workflow_id, event_id)`
+  before any action and releases it when the run fails. Keep both halves.
+- **Never drop a failed event**: every failure path ends in `dlq.write`. A new DLQ target
+  must persist or raise; logging alone is not acceptable.
+- **Deterministic core**: retry/backoff maths, DLQ routing, ordering and label validation
+  live in Python, never in a prompt. The `ai` action only proposes a value, which the code
+  then constrains to `labels`.
+- **Offline tests**: nothing under `tests/` may use the network. Use
+  `httpx.MockTransport` (via `make_executor(transport)`) or respx, and inject fake
+  `openai` / `anthropic` modules for provider tests.
+- **Errors**: raise `ActionError(message, error_code=..., retryable=...)`. Use
+  `retryable=False` for anything a retry cannot fix (bad config, forbidden target).
 
 ## Security configuration (env vars)
-- `ETAA_WEBHOOK_SECRET` / `ETAA_WEBHOOK_SECRET_<SOURCE>` — enable HMAC-SHA256 signature
-  verification on inbound webhooks (`X-ETAA-Signature: sha256=<hex>`). When any secret is
-  set, unconfigured sources **fail closed** (401) unless listed in
-  `ETAA_WEBHOOK_UNSIGNED_SOURCES`.
-- `ETAA_FUNCTION_ALLOWLIST` — comma-separated module prefixes the `function` action may
-  import (default `examples.,etaa.`; `*` allows any — not recommended).
+| Variable | Effect |
+|---|---|
+| `ETAA_WEBHOOK_SECRET`, `ETAA_WEBHOOK_SECRET_<SOURCE>` | HMAC-SHA256 over `timestamp.body` (`X-ETAA-Signature`, `X-ETAA-Timestamp`); fail closed once any secret is set |
+| `ETAA_WEBHOOK_UNSIGNED_SOURCES` | Sources exempt from signing |
+| `ETAA_WEBHOOK_TOLERANCE_SECONDS` | Replay window (default 300) |
+| `ETAA_MAX_BODY_BYTES`, `ETAA_RATE_LIMIT_PER_MINUTE` | Request limits (1 MiB, 600) |
+| `ETAA_API_KEY` | Protects `/runs`, `/metrics`, `/workflows` |
+| `ETAA_HTTP_ALLOWED_HOSTS`, `ETAA_HTTP_ALLOW_PRIVATE` | Outbound HTTP guard |
+| `ETAA_FUNCTION_ALLOWLIST` | Module prefixes `function` actions may import (default `examples.,etaa.`) |
+| `ETAA_SECRET_*` | The only env vars a workflow can read, via `{{env.ETAA_SECRET_X}}` |
+| `ETAA_IDEMPOTENCY_DB` | SQLite path for a persistent idempotency store |
 
 ## Gotchas
-- **Singleton stores**: `get_metrics_store()`, `get_run_history()`,
-  `get_idempotency_manager()` return module-level singletons; state carries across runs in
-  one process. Inject fresh instances in tests; call `.close()` between experiments.
-- **PYTHONPATH**: demo scripts need the project root importable (`PYTHONPATH=.` or an
-  editable install).
-- **Recursive workflow loading**: `load_workflows(dir)` scans recursively and dedupes by
-  path; any stray `*.yaml` under the directory is registered.
-- **Demos hit the network**: example workflows POST to placeholder URLs, so demo/benchmark
-  runs report `failed`/`dlq` by design — they exercise the retry + DLQ paths, not success.
+- **Singleton stores**: `get_metrics_store()`, `get_run_history()` and
+  `get_idempotency_manager()` are process-wide and used by `build_application`. Tests should
+  build an executor with `make_executor` instead.
+- **Runtime data**: demos, the CLI and the benchmark write under `./data/` (gitignored).
+- **Recursive workflow loading**: `load_workflows(dir)` registers every `*.yaml` under the
+  directory.
+- **Replay restarts the workflow** from its first action; actions must be safe to repeat.
+- **Hooks**: a `git commit` command that also contains `-n` anywhere (for example
+  `grep -n`) is blocked by the no-verify hook. Run the commit on its own.
 
 See `.claude/rules/` (linked from `.agents/rules/`) for path-scoped rules and
 `.claude/skills/` (linked from `.agents/skills/`) for repo-specific procedures.

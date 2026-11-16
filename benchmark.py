@@ -21,7 +21,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from etaa.ingress import WebhookIngress
-from etaa.main import build_application
+from etaa.main import build_application, dry_run_transport
 
 
 @dataclass
@@ -94,7 +94,10 @@ def generate_sample_events() -> list[dict[str, Any]]:
 
 
 async def run_benchmark(workflows_dir: str, iterations: int) -> None:
-    app, router, executor = build_application(workflows_path=workflows_dir)
+    # Mock transport: measures engine overhead, not someone else's network.
+    _, router, executor = build_application(
+        workflows_path=workflows_dir, http_transport=dry_run_transport()
+    )
     ingress = WebhookIngress()
     events = generate_sample_events()
 
@@ -109,7 +112,8 @@ async def run_benchmark(workflows_dir: str, iterations: int) -> None:
     for it in range(1, iterations + 1):
         round_start = time.monotonic()
         for event_data in events:
-            event = await ingress.ingest(event_data)
+            # Unique id per iteration, otherwise every later round is an idempotent skip.
+            event = await ingress.ingest({**event_data, "id": f"{event_data['id']}-{it}"})
             runs = await executor.execute(event)
             for run in runs:
                 wf = run.workflow_id

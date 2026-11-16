@@ -51,70 +51,65 @@ dlq:
 
 Key observations:
 - The workflow fires only on `source=stripe` + `type=payment_succeeded` + `payload.success=true`.
-- `notify_email` is retried up to 3 times with exponential backoff (1s, 2s, 4s).
+- `notify_email` gets up to 3 attempts with exponential backoff between them (1s, then 2s).
 - `update_crm` runs only if `notify_email` succeeds (`depends_on`).
 - Failed events land in `./data/dlq/payment.jsonl`.
 
 ## Step 2 — Run the Demo Script
 
-The demo sends three events: two distinct payments and one duplicate (to test idempotency).
+The demo sends four events through a mock HTTP endpoint (no network needed): two payments,
+a duplicate of the first, and one payment whose email call always returns 503.
 
 ```bash
-PYTHONPATH=. python examples/payment_webhook/demo.py
+PYTHONPATH=. uv run python examples/payment_webhook/demo.py
 ```
 
 Expected output:
 
 ```
-Registered workflows: 1
-============================================================
-
 ── Event #1: evt_pay_001 ──
-  Run <uuid>
-    Status : failed                 ← HTTP call to fake URL fails (expected in demo)
-    Attempts: 1
-    [✗] action=notify_email attempt=1 err=Connection error: ...
-    Latency: 0.06s
+  status=success  attempts=2
+    [✓] notify_email (attempts=1)
+    [✓] update_crm (attempts=1)
 
 ── Event #2: evt_pay_002 ──
-  Run <uuid>
-    Status : failed
-    [✗] action=notify_email attempt=1 ...
+  status=success  attempts=2
 
-── Event #3: evt_pay_001 ──        ← Duplicate!
-  Run <uuid>
-    Status : skipped                ← Idempotency kicks in — zero work done
-    Attempts: 0
+── Event #3: evt_pay_001 ──          ← duplicate
+  status=skipped  attempts=0         ← idempotency: nothing executed
 
-Metrics snapshot:
-{
-  "payment-webhook": {
-    "started_count": 2,
-    "skipped_count": 1,
-    "failure_count": 2,
-    "latency_avg": 0.03
-  }
-}
+── Event #4: evt_pay_003 ──          ← email endpoint is down
+  status=failed  attempts=3
+    [✗] notify_email (attempts=3)  error=Unexpected status 503  → dead-lettered
 ```
 
-## Step 3 — Inspect the Dead-Letter Queue
+Event #4 takes about three seconds: the email is retried with exponential backoff (1s, 2s)
+before the event is dead-lettered. `update_crm` never runs because it depends on the email.
+
+## Step 3 — Inspect and Replay the Dead-Letter Queue
 
 ```bash
 cat data/dlq/payment.jsonl
 ```
 
-You'll see JSONL entries like:
-
 ```json
-{"dlq_enqueued_at":"2026-10-01T01:00:00Z","action_id":"notify_email","event":{"event_id":"evt_pay_001","source":"stripe","type":"payment_succeeded","payload":{...}},"error":"Connection error: ..."}
+{"dlq_enqueued_at":"…","workflow_id":"payment-webhook","action_id":"notify_email","event":{"event_id":"evt_pay_003","source":"stripe","type":"payment_succeeded","payload":{…}},"error":"Unexpected status 503"}
 ```
 
-These are your salvageable events. In production, a worker would poll this DLQ and retry with adjusted config.
+Once the downstream service is healthy, replay it:
+
+```bash
+uv run etaa replay data/dlq/payment.jsonl --workflows examples/payment_webhook --dry-run
+# { "replayed": 1, "succeeded": 1, "failed": 0, "skipped": 0 }
+```
+
+Replayed records are removed from the file. An event that fails again is dead-lettered
+again, so nothing is lost. A replay re-runs the workflow from its first action.
 
 ## Step 4 — Run the Webhook Server (optional)
 
 ```bash
-PYTHONPATH=. python -m etaa.main server --workflows examples/payment_webhook/ --port 8000
+uv run etaa server --workflows examples/payment_webhook/ --port 8000 --dry-run
 ```
 
 In another terminal:
@@ -122,17 +117,17 @@ In another terminal:
 ```bash
 curl -X POST http://localhost:8000/api/v1/webhook/stripe \
   -H "Content-Type: application/json" \
-  -d '{"id":"evt_live_001","source":"stripe","type":"payment_succeeded","data":{"customer_email":"u@example.com","amount":5000,"success":true}}'
-```
+  -d '{"id":"evt_live_001","type":"payment_succeeded","data":{"customer_email":"u@example.com","amount":5000,"success":true}}'
 
-Check metrics:
-```bash
 curl http://localhost:8000/api/v1/metrics
 curl http://localhost:8000/api/v1/runs
 ```
 
+`--dry-run` validates and renders the HTTP actions without sending them. See the Security
+section of the README for signed requests.
+
 ## What's Next
 
 - Try `examples/gitops_automation/demo.py` and `examples/support_ticket_flow/demo.py`.
-- Run the full benchmark: `python benchmark.py --iterations 20`.
-- Read [`docs/IDEMPOTENCY_AND_RETRIES.md`](IDEMPOTENCY_AND_RETRIES.md) for deeper theory.
+- Run the benchmark: `make benchmark`.
+- Read [`docs/IDEMPOTENCY_AND_RETRIES.md`](IDEMPOTENCY_AND_RETRIES.md) for the reasoning.

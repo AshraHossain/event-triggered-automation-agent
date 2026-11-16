@@ -75,3 +75,59 @@ def test_cli_run_offline(workflows_dir, tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "cli-wf" in out
     assert "success" in out
+
+
+HTTP_WF = """
+id: http-wf
+name: HTTP Workflow
+triggers:
+  - source: test
+    type: call
+actions:
+  - id: notify
+    type: http
+    config:
+      method: POST
+      url: https://api.example.com/notify
+dlq:
+  target_type: file
+  target_config:
+    path: {dlq}
+"""
+
+
+def test_cli_run_dry_run_sends_nothing(tmp_path, monkeypatch, capsys):
+    (tmp_path / "wf.yaml").write_text(HTTP_WF.format(dlq=tmp_path / "dlq.jsonl"))
+    event_file = tmp_path / "event.json"
+    event_file.write_text(json.dumps({"id": "dry-1", "source": "test", "type": "call"}))
+    argv = ["etaa", "run", str(event_file), "--workflows", str(tmp_path / "wf.yaml"), "--dry-run"]
+    monkeypatch.setattr("sys.argv", argv)
+    main()
+    out = capsys.readouterr().out
+    assert '"status": "success"' in out
+    assert '"dry_run": true' in out
+
+
+def test_cli_run_reports_no_match(workflows_dir, tmp_path, monkeypatch, capsys):
+    event_file = tmp_path / "event.json"
+    event_file.write_text(json.dumps({"id": "nm-1", "source": "nobody", "type": "x"}))
+    argv = ["etaa", "run", str(event_file), "--workflows", str(workflows_dir)]
+    monkeypatch.setattr("sys.argv", argv)
+    main()
+    assert "No workflow matched" in capsys.readouterr().out
+
+
+def test_cli_replay_dry_run(tmp_path, monkeypatch, capsys):
+    dlq = tmp_path / "dlq.jsonl"
+    (tmp_path / "wf.yaml").write_text(HTTP_WF.format(dlq=dlq))
+    record = {
+        "workflow_id": "http-wf",
+        "action_id": "notify",
+        "event": {"event_id": "rp-1", "source": "test", "type": "call", "payload": {}},
+    }
+    dlq.write_text(json.dumps(record) + "\n")
+    argv = ["etaa", "replay", str(dlq), "--workflows", str(tmp_path / "wf.yaml"), "--dry-run"]
+    monkeypatch.setattr("sys.argv", argv)
+    main()
+    assert json.loads(capsys.readouterr().out)["succeeded"] == 1
+    assert dlq.read_text() == ""
