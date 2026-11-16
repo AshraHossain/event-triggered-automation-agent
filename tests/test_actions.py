@@ -27,7 +27,7 @@ def test_http_action_fields(sample_event):
 
 @pytest.mark.asyncio
 async def test_function_action_missing_module(sample_event):
-    action = ActionSpec(id="f1", type=ActionKind.FUNCTION, config={"module_path": "nonexistent.module.func"})
+    action = ActionSpec(id="f1", type=ActionKind.FUNCTION, config={"module_path": "examples.nonexistent.module.func"})
     fa = FunctionAction()
     with pytest.raises(ActionError, match="Cannot import module"):
         await fa.execute(action, sample_event)

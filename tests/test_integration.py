@@ -29,7 +29,7 @@ from etaa.models import (
     ActionKind,
     ActionSpec,
     DLQConfig,
-    DlgTargetKind,
+    DLQTargetKind,
     EventEnvelope,
     ExecutionStatus,
     RetryPolicy,
@@ -229,7 +229,7 @@ async def test_full_pipeline_dlq_after_exhaustion(full_pipeline, tmp_path):
             ),
         ],
         dlq=DLQConfig(
-            target_type=DlgTargetKind.FILE,
+            target_type=DLQTargetKind.FILE,
             target_config={"path": dlq_path},
             include_payload=True,
             include_error=True,
@@ -273,9 +273,9 @@ async def test_full_pipeline_dag_ordering(full_pipeline):
         return {"called": True, "action_id": context["action_id"]}
 
     import types
-    mod = types.ModuleType("test_temp_handler")
+    mod = types.ModuleType("examples.test_temp_handler")
     mod.test_fn = sync_fn
-    sys.modules["test_temp_handler"] = mod
+    sys.modules["examples.test_temp_handler"] = mod
 
     wf = WorkflowSpec(
         id="test-dag-wf",
@@ -285,7 +285,7 @@ async def test_full_pipeline_dag_ordering(full_pipeline):
             ActionSpec(
                 id="second",
                 type=ActionKind.FUNCTION,
-                config={"module_path": "test_temp_handler.test_fn"},
+                config={"module_path": "examples.test_temp_handler.test_fn"},
                 depends_on=["first"],
             ),
             ActionSpec(
@@ -308,7 +308,7 @@ async def test_full_pipeline_dag_ordering(full_pipeline):
     assert runs[0].action_logs[1].action_id == "second"
 
     # Clean up
-    sys.modules.pop("test_temp_handler", None)
+    sys.modules.pop("examples.test_temp_handler", None)
 
 
 @pytest.mark.asyncio

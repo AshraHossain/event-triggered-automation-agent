@@ -2,13 +2,52 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
+import os
 from abc import ABC, abstractmethod
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 from ..models import EventEnvelope
 from ..observability.logger import setup_logger
 
 log = setup_logger(__name__)
+
+
+def _stable_event_id(data: dict[str, Any]) -> str:
+    """Derive a deterministic event id from *data* when none is supplied.
+
+    ``hash()`` is salted per process, so it cannot be used for idempotency —
+    the same event would dedupe differently across workers. A content hash is
+    stable across processes and restarts.
+    """
+    canonical = json.dumps(data, sort_keys=True, default=str)
+    return "evt_" + hashlib.sha256(canonical.encode()).hexdigest()[:24]
+
+
+def webhook_secret(source: str) -> str | None:
+    """Return the configured HMAC secret for *source*, if any.
+
+    Looks up ``ETAA_WEBHOOK_SECRET_<SOURCE>`` (uppercased) first, then the
+    global ``ETAA_WEBHOOK_SECRET``. Returns None when signature verification
+    is not configured for this source.
+    """
+    specific = os.environ.get(f"ETAA_WEBHOOK_SECRET_{source.upper()}")
+    return specific or os.environ.get("ETAA_WEBHOOK_SECRET")
+
+
+def verify_signature(secret: str, raw_body: bytes, signature: str | None) -> bool:
+    """Return True if *signature* is a valid ``sha256=<hex>`` HMAC of *raw_body*.
+
+    Comparison is constant-time to avoid timing side channels.
+    """
+    if not signature:
+        return False
+    expected = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
+    provided = signature[7:] if signature.startswith("sha256=") else signature
+    return hmac.compare_digest(expected, provided)
 
 
 class BaseIngress(ABC):
@@ -41,17 +80,21 @@ class WebhookIngress(BaseIngress):
 
     async def ingest(self, raw: dict | bytes | Any) -> EventEnvelope:
         if isinstance(raw, bytes):
-            import json
             data = json.loads(raw)
         elif isinstance(raw, dict):
             data = raw
         else:
             data = {"raw": str(raw)}
 
-        event_id = data.get("id") or data.get("event_id") or str(hash(str(data)) & 0xFFFFFFFF)
+        event_id = data.get("id") or data.get("event_id") or _stable_event_id(data)
         source = data.get("source") or data.get("x-event-source", self._default_source)
         etype = data.get("type") or data.get("x-event-type", self._default_type)
-        payload = data.get("data") or data.get("payload") or {k: v for k, v in data.items() if k not in ("id", "source", "type", "event_id")}
+        reserved = ("id", "source", "type", "event_id")
+        payload = (
+            data.get("data")
+            or data.get("payload")
+            or {k: v for k, v in data.items() if k not in reserved}
+        )
 
         return EventEnvelope(
             event_id=str(event_id),

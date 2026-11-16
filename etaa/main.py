@@ -5,24 +5,25 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import sys
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from .actions import AiAction, FunctionAction, HttpAction, QueueAction
 from .engine.event_router import EventRouter
+from .engine.idempotency_manager import get_idempotency_manager
 from .engine.workflow_executor import WorkflowExecutor
-from .ingress import WebhookIngress, make_queue_ingress
+from .ingress import WebhookIngress
 from .ingress.webhook_server import create_app
 from .models import WorkflowSpec
-from .observability.metrics_store import MetricsStore, get_metrics_store
-from .observability.run_history_store import RunHistoryStore, get_run_history
-from .engine.idempotency_manager import IdempotencyManager, get_idempotency_manager
-from .actions import HttpAction, QueueAction, FunctionAction, AiAction
+from .observability.metrics_store import get_metrics_store
+from .observability.run_history_store import get_run_history
 
 
-def build_application(workflows_path: str | None = None) -> tuple[Any, EventRouter, WorkflowExecutor]:
+def build_application(
+    workflows_path: str | None = None,
+) -> tuple[Any, EventRouter, WorkflowExecutor]:
     """Build the full ETAA application with all components wired together.
 
     Parameters
@@ -35,7 +36,6 @@ def build_application(workflows_path: str | None = None) -> tuple[Any, EventRout
     -------
     app, router, executor
     """
-    from fastapi import FastAPI  # lazy import to avoid hard dep at module level
 
     metrics = get_metrics_store()
     history = get_run_history()

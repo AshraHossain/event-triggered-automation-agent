@@ -8,7 +8,7 @@ from datetime import datetime
 from etaa.models import (
     ActionKind,
     DLQConfig,
-    DlgTargetKind,
+    DLQTargetKind,
     EventEnvelope,
     ExecutionStatus,
     RetryPolicy,
@@ -134,7 +134,7 @@ def test_router_no_match():
 
 def test_dlq_defaults():
     cfg = DLQConfig()
-    assert cfg.target_type == DlgTargetKind.FILE
+    assert cfg.target_type == DLQTargetKind.FILE
     assert cfg.include_payload is True
     assert cfg.include_error is True
 

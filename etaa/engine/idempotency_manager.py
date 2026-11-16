@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import threading
-import uuid
-from datetime import datetime, timedelta
-from typing import Optional
+from datetime import UTC, datetime, timedelta
 
 from ..observability.logger import setup_logger
 
@@ -34,7 +32,7 @@ class IdempotencyManager:
     def check_and_set(self, workflow_id: str, event_id: str) -> bool:
         """Return True if this (workflow, event) pair has ALREADY been processed."""
         key = f"{workflow_id}:{event_id}"
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         with self._lock:
             # Prune expired entries
             expired = [k for k, ts in self._seen.items() if now - ts > self._ttl]

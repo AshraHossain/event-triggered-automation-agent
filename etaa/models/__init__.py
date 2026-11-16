@@ -7,36 +7,40 @@ All models use Pydantic v2 for validation and serialization.
 
 from __future__ import annotations
 
-from datetime import datetime
-from enum import Enum
-from typing import Any, Optional
+from datetime import UTC, datetime
+from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
 
-class BackoffStrategy(str, Enum):
+class BackoffStrategy(StrEnum):
     """Backoff strategy for retry attempts."""
+
     FIXED = "fixed"
     EXPONENTIAL = "exponential"
 
 
-class ActionKind(str, Enum):
+class ActionKind(StrEnum):
     """Types of actions a workflow can execute."""
+
     HTTP = "http"
     QUEUE = "queue"
     FUNCTION = "function"
     AI = "ai"
 
 
-class DlgTargetKind(str, Enum):
+class DLQTargetKind(StrEnum):
     """Target types for dead-letter queue routing."""
+
     QUEUE = "queue"
     FILE = "file"
     DB = "db"
 
 
-class ExecutionStatus(str, Enum):
+class ExecutionStatus(StrEnum):
     """Status of a workflow execution run."""
+
     PENDING = "pending"
     RUNNING = "running"
     SUCCESS = "success"
@@ -66,7 +70,10 @@ class EventEnvelope(BaseModel):
     source: str = Field(..., description="Originating system, e.g. 'stripe', 'github'.")
     type: str = Field(..., description="Event type, e.g. 'payment_succeeded'.")
     payload: dict[str, Any] = Field(default_factory=dict, description="Arbitrary event payload.")
-    received_at: datetime = Field(default_factory=datetime.utcnow, description="UTC timestamp of receipt.")
+    received_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC),
+        description="UTC timestamp of receipt.",
+    )
     metadata: dict[str, Any] = Field(default_factory=dict, description="Optional extension data.")
 
     def idempotency_key(self, workflow_id: str) -> str:
@@ -80,7 +87,7 @@ class RetryPolicy(BaseModel):
     """Retry behaviour configuration for an action or entire workflow.
 
     Example:
-        >>> policy = RetryPolicy(max_attempts=3, backoff_strategy="exponential", backoff_seconds=2.0)
+        >>> policy = RetryPolicy(max_attempts=3, backoff_strategy="exponential")
     """
 
     max_attempts: int = Field(default=3, ge=1, description="Maximum number of execution attempts.")
@@ -88,18 +95,23 @@ class RetryPolicy(BaseModel):
         default=BackoffStrategy.EXPONENTIAL,
         description="Backoff strategy: 'fixed' or 'exponential'.",
     )
-    backoff_seconds: float = Field(default=1.0, gt=0, description="Base delay in seconds between retries.")
+    backoff_seconds: float = Field(
+        default=1.0, gt=0, description="Base delay in seconds between retries."
+    )
+    backoff_cap_seconds: float = Field(
+        default=60.0, gt=0, description="Upper bound on exponential backoff delay."
+    )
     retryable_error_codes: list[str | int] = Field(
         default_factory=list,
-        description="Error codes (string or int) considered retryable. Empty means all retries.",
+        description="Error codes considered retryable. Empty means all errors are retryable.",
     )
 
     def compute_delay(self, attempt: int) -> float:
         """Return the delay (in seconds) before the next retry *attempt* (1-indexed)."""
         if self.backoff_strategy == BackoffStrategy.FIXED:
             return self.backoff_seconds
-        # Exponential: 2^(attempt-1) * backoff_seconds, capped at 60s
-        return min(self.backoff_seconds * (2 ** (attempt - 1)), 60.0)
+        # Exponential: 2^(attempt-1) * backoff_seconds, capped at backoff_cap_seconds.
+        return min(self.backoff_seconds * (2 ** (attempt - 1)), self.backoff_cap_seconds)
 
     def should_retry(self, error_code: str | int | None, attempt: int) -> bool:
         """Decide whether another retry is warranted."""
@@ -107,7 +119,7 @@ class RetryPolicy(BaseModel):
             return False
         if not self.retryable_error_codes:
             return True
-        # If no specific error code provided (generic exception), retry
+        # If no specific error code provided (generic exception), retry.
         if error_code is None:
             return True
         return str(error_code) in [str(c) for c in self.retryable_error_codes]
@@ -121,16 +133,22 @@ class DLQConfig(BaseModel):
     When an action exhausts its retry budget the event is routed here.
 
     Example:
-        >>> dlq = DLQConfig(target_type="file", target_config={"path": "/tmp/dlq.json"}, include_payload=True)
+        >>> dlq = DLQConfig(target_type="file", target_config={"path": "/tmp/dlq.json"})
     """
 
-    target_type: DlgTargetKind = Field(default=DlgTargetKind.FILE, description="Where failed events go.")
+    target_type: DLQTargetKind = Field(
+        default=DLQTargetKind.FILE, description="Where failed events go."
+    )
     target_config: dict[str, Any] = Field(
         default_factory=dict,
         description="Target-specific config (path, queue_name, table_name, …).",
     )
-    include_payload: bool = Field(default=True, description="Include the original event payload in the DLQ record.")
-    include_error: bool = Field(default=True, description="Include the last error details in the DLQ record.")
+    include_payload: bool = Field(
+        default=True, description="Include the original event payload in the DLQ record."
+    )
+    include_error: bool = Field(
+        default=True, description="Include the last error details in the DLQ record."
+    )
 
 
 # ─── ActionSpec ───────────────────────────────────────────────────────────────
@@ -139,17 +157,17 @@ class ActionSpec(BaseModel):
     """Single step within a workflow definition.
 
     Example:
-        >>> action = ActionSpec(
-        ...     id="notify_slack",
-        ...     type="http",
-        ...     config={"method": "POST", "url": "https://hooks.slack.com/...", "headers": {"Content-Type": "application/json"}},
-        ... )
+        >>> action = ActionSpec(id="notify_slack", type="http", config={"method": "POST"})
     """
 
     id: str = Field(..., description="Unique action identifier within the workflow.")
     type: ActionKind = Field(..., description="Action kind: http, queue, function, or ai.")
-    config: dict[str, Any] = Field(default_factory=dict, description="Action-specific configuration dict.")
-    retry_policy: Optional[RetryPolicy] = Field(None, description="Per-action retry override (None → use workflow default).")
+    config: dict[str, Any] = Field(
+        default_factory=dict, description="Action-specific configuration dict."
+    )
+    retry_policy: RetryPolicy | None = Field(
+        None, description="Per-action retry override (None → use workflow default)."
+    )
     depends_on: list[str] = Field(
         default_factory=list,
         description="List of action ids that must succeed before this action runs.",
@@ -157,7 +175,11 @@ class ActionSpec(BaseModel):
 
     @field_validator("depends_on")
     @classmethod
-    def _reject_self_dependency(cls, v: list[str]) -> list[str]:
+    def _reject_self_dependency(cls, v: list[str], info) -> list[str]:
+        """Reject an action that lists its own id as a dependency."""
+        own_id = (info.data or {}).get("id")
+        if own_id and own_id in v:
+            raise ValueError(f"Action {own_id!r} cannot depend on itself")
         return v
 
 
@@ -179,11 +201,9 @@ class WorkflowTrigger(BaseModel):
             return False
         if event.type != self.type:
             return False
-        for key, expected in self.filters.items():
-            actual = event.payload.get(key)
-            if actual != expected:
-                return False
-        return True
+        return all(
+            event.payload.get(key) == expected for key, expected in self.filters.items()
+        )
 
 
 class WorkflowSpec(BaseModel):
@@ -193,7 +213,6 @@ class WorkflowSpec(BaseModel):
 
         id: payment-webhook
         name: Payment Webhook
-        description: Process Stripe payments
         triggers:
           - source: stripe
             type: payment_succeeded
@@ -201,21 +220,23 @@ class WorkflowSpec(BaseModel):
           - id: send_email
             type: http
             config: {…}
-        retry_policy:
-          max_attempts: 3
-          backoff_strategy: exponential
-        dlq:
-          target_type: file
-          target_config: {path: /tmp/dlq.json}
     """
 
     id: str = Field(..., description="Unique workflow identifier.")
     name: str = Field(..., description="Human-readable name.")
     description: str = Field(default="", description="Brief description of the workflow.")
-    triggers: list[WorkflowTrigger] = Field(default_factory=list, description="Trigger rules (OR logic).")
-    actions: list[ActionSpec] = Field(default_factory=list, description="Ordered list of actions.")
-    retry_policy: RetryPolicy = Field(default_factory=RetryPolicy, description="Default retry policy.")
-    dlq: DLQConfig = Field(default_factory=DLQConfig, description="Dead-letter queue configuration.")
+    triggers: list[WorkflowTrigger] = Field(
+        default_factory=list, description="Trigger rules (OR logic)."
+    )
+    actions: list[ActionSpec] = Field(
+        default_factory=list, description="Ordered list of actions."
+    )
+    retry_policy: RetryPolicy = Field(
+        default_factory=RetryPolicy, description="Default retry policy."
+    )
+    dlq: DLQConfig = Field(
+        default_factory=DLQConfig, description="Dead-letter queue configuration."
+    )
 
     def matches(self, event: EventEnvelope) -> bool:
         """Return True if *event* matches at least one trigger."""
@@ -232,15 +253,15 @@ class AttemptRecord(BaseModel):
     started_at: datetime
     finished_at: datetime
     status: str  # "success" | "failed"
-    error: Optional[str] = None
-    response: Optional[dict[str, Any]] = None
+    error: str | None = None
+    response: dict[str, Any] | None = None
 
 
 class RunRecord(BaseModel):
     """Persistent record of one workflow execution, used for audit & replay.
 
     Example:
-        >>> rec = RunRecord(run_id="run-001", event_id="evt-x", workflow_id="wf-pay", status="success")
+        >>> rec = RunRecord(run_id="r1", event_id="e1", workflow_id="w1", status="success")
     """
 
     run_id: str = Field(..., description="Unique run identifier.")
@@ -248,11 +269,14 @@ class RunRecord(BaseModel):
     workflow_id: str = Field(..., description="The workflow that executed.")
     status: ExecutionStatus = Field(..., description="Final execution status.")
     attempts: int = Field(default=0, description="Total number of action attempts made.")
-    started_at: datetime = Field(default_factory=datetime.utcnow)
-    finished_at: Optional[datetime] = None
+    started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    finished_at: datetime | None = None
     metrics: dict[str, Any] = Field(default_factory=dict, description="Latency, counts, etc.")
-    action_logs: list[AttemptRecord] = Field(default_factory=list, description="Per-attempt detail.")
+    action_logs: list[AttemptRecord] = Field(
+        default_factory=list, description="Per-attempt detail."
+    )
 
     def finish(self, status: ExecutionStatus) -> None:
+        """Mark the run finished with *status* and stamp ``finished_at``."""
         self.status = status
-        self.finished_at = datetime.utcnow()
+        self.finished_at = datetime.now(UTC)
