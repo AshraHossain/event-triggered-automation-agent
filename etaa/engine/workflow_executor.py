@@ -129,7 +129,10 @@ class WorkflowExecutor:
                 status = ExecutionStatus.FAILED
                 log.error(
                     "Workflow %s action %s failed after %d attempt(s): %s",
-                    wf.id, action.id, result.attempt, result.error,
+                    wf.id,
+                    action.id,
+                    result.attempt,
+                    result.error,
                 )
                 break  # stop on first failure
             self._metrics.increment(wf.id, "action_success_count")

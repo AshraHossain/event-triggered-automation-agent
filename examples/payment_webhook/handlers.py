@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import json
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from etaa.models import EventEnvelope
@@ -24,7 +23,7 @@ def update_crm(event: EventEnvelope, context: dict[str, Any]) -> dict[str, Any]:
         "customer_id": customer_id,
         "amount": f"{amount} {currency}",
         "invoice_id": invoice_id,
-        "updated_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.now(UTC).isoformat(),
     }
     print(f"[CRM] Updated record for customer={customer_id}, amount={amount}{currency}")
     return result
@@ -35,5 +34,5 @@ def send_acknowledgment(event: EventEnvelope, context: dict[str, Any]) -> dict[s
     return {
         "action": "ack_sent",
         "customer_email": event.payload.get("customer_email"),
-        "sent_at": datetime.utcnow().isoformat(),
+        "sent_at": datetime.now(UTC).isoformat(),
     }

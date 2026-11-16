@@ -38,6 +38,8 @@ class RunHistoryStore:
 
     def _connect_db(self, db_path: str) -> None:
         self._conn = sqlite3.connect(db_path)
+        # Row factory lets _row_to_record read columns by name via dict(row).
+        self._conn.row_factory = sqlite3.Row
         self._conn.execute("""
             CREATE TABLE IF NOT EXISTS runs (
                 run_id      TEXT PRIMARY KEY,
@@ -140,6 +142,7 @@ class RunHistoryStore:
     @staticmethod
     def _row_to_record(row: dict[str, Any]) -> RunRecord:
         from ..models import AttemptRecord, ExecutionStatus
+
         finished = row.get("finished_at")
         raw_logs = json.loads(row["action_logs"]) if row.get("action_logs") else []
         return RunRecord(

@@ -39,7 +39,10 @@ class EventRouter:
                 matched.append(wf)
         log.info(
             "Event %s (%s:%s) matched %d workflow(s)",
-            event.event_id, event.source, event.type, len(matched),
+            event.event_id,
+            event.source,
+            event.type,
+            len(matched),
         )
         return matched
 

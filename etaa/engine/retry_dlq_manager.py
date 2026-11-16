@@ -63,7 +63,9 @@ class RetryDLQManager:
                 if not policy.should_retry(error_code, attempt):
                     log.warning(
                         "Action %s failed (non-retryable code=%s) on attempt %d",
-                        action.id, error_code, attempt,
+                        action.id,
+                        error_code,
+                        attempt,
                     )
                     if dlq:
                         await self._send_to_dlq(dlq, action, event, last_error)
@@ -72,7 +74,10 @@ class RetryDLQManager:
                 delay = policy.compute_delay(attempt)
                 log.info(
                     "Retrying action %s in %.2fs (attempt %d/%d)",
-                    action.id, delay, attempt, policy.max_attempts,
+                    action.id,
+                    delay,
+                    attempt,
+                    policy.max_attempts,
                 )
                 if self._async_delay:
                     await asyncio.sleep(delay)

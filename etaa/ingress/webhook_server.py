@@ -11,7 +11,14 @@ from fastapi.responses import JSONResponse
 
 from ..engine.event_router import EventRouter
 from ..engine.workflow_executor import WorkflowExecutor
-from ..ingress import WebhookIngress, verify_signature, webhook_secret
+from ..ingress import (
+    WebhookIngress,
+    resolve_source,
+    signing_enabled,
+    unsigned_sources,
+    verify_signature,
+    webhook_secret,
+)
 from ..observability.logger import setup_logger
 
 log = setup_logger(__name__)
@@ -19,22 +26,24 @@ log = setup_logger(__name__)
 SIGNATURE_HEADER = "X-ETAA-Signature"
 
 
-async def _read_body(request: Request, source: str) -> dict[str, Any]:
-    """Read, verify, and parse a webhook request body.
+def _verify(source: str, raw: bytes, signature: str | None) -> None:
+    """Enforce the signing policy for *source*; raise 401 on failure.
 
-    Raises:
-        HTTPException: 400 on malformed JSON, 401 on a bad or missing signature
-            when a secret is configured for *source*.
+    Fails closed: if signing is enabled anywhere and *source* has no usable
+    secret (and is not explicitly exempt), the request is rejected.
     """
-    raw = await request.body()
-
     secret = webhook_secret(source)
     if secret is not None:
-        signature = request.headers.get(SIGNATURE_HEADER)
         if not verify_signature(secret, raw, signature):
             log.warning("Rejected webhook for source=%s: invalid signature", source)
             raise HTTPException(status_code=401, detail="Invalid webhook signature")
+    elif signing_enabled() and source not in unsigned_sources():
+        log.warning("Rejected webhook for source=%s: signature required", source)
+        raise HTTPException(status_code=401, detail="Webhook signature required")
 
+
+def _parse_body(raw: bytes) -> dict[str, Any]:
+    """Parse *raw* as a JSON object, raising 400 on malformed input."""
     if not raw:
         return {}
     try:
@@ -90,9 +99,11 @@ def create_app(
 
     @app.post(f"{prefix}/webhook/{{source}}")
     async def handle_webhook(source: str, request: Request) -> JSONResponse:
-        """Accept a webhook for *source* and dispatch matching workflows."""
-        body = await _read_body(request, source)
-        body.setdefault("source", source)  # URL path is the source of record
+        """Accept a webhook for *source* (from the URL path) and dispatch it."""
+        raw = await request.body()
+        _verify(source, raw, request.headers.get(SIGNATURE_HEADER))
+        body = _parse_body(raw)
+        body["source"] = source  # path is authoritative: routed source == verified source
         event = await wh_ingress.ingest(body)
         runs = await executor.execute(event)
         statuses = [r.status.value for r in runs]
@@ -100,14 +111,14 @@ def create_app(
 
     @app.post(f"{prefix}/webhook")
     async def handle_any_webhook(request: Request) -> JSONResponse:
-        """Generic endpoint for webhooks that include source/type in the payload."""
-        # Peek at the declared source to select the signing secret.
-        peek = await request.body()
-        try:
-            declared_source = str(json.loads(peek).get("source", "")) if peek else ""
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            declared_source = ""
-        body = await _read_body(request, declared_source)
+        """Generic endpoint for webhooks that carry source/type in the body."""
+        raw = await request.body()
+        body = _parse_body(raw)
+        # Resolve the source exactly as ingest will, then verify against it and
+        # pin it, so the verified source is the one that gets routed.
+        source = resolve_source(body)
+        _verify(source, raw, request.headers.get(SIGNATURE_HEADER))
+        body["source"] = source
         event = await wh_ingress.ingest(body)
         runs = await executor.execute(event)
         statuses = [r.status.value for r in runs]
@@ -120,6 +131,7 @@ def create_app(
     @app.get(f"{prefix}/runs")
     async def list_runs(workflow_id: str | None = None, limit: int = 50) -> list[dict]:
         from ..observability.run_history_store import get_run_history
+
         hist = get_run_history()
         records = hist.list(workflow_id=workflow_id, limit=limit)
         return [r.model_dump() for r in records]
@@ -127,6 +139,7 @@ def create_app(
     @app.get(f"{prefix}/metrics")
     async def get_metrics() -> dict[str, Any]:
         from ..observability.metrics_store import get_metrics_store
+
         store = get_metrics_store()
         return store.snapshot()
 

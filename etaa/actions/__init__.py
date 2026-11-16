@@ -53,11 +53,11 @@ class BaseAction(ABC):
     """Abstract base for all action types."""
 
     @abstractmethod
-    async def execute(self, action: ActionSpec, event: EventEnvelope) -> ActionResult:
-        ...
+    async def execute(self, action: ActionSpec, event: EventEnvelope) -> ActionResult: ...
 
 
 # ─── HTTP Action ──────────────────────────────────────────────────────────────
+
 
 class HttpAction(BaseAction):
     """Perform an HTTP request.
@@ -176,6 +176,7 @@ class HttpAction(BaseAction):
 
 # ─── Queue Action ─────────────────────────────────────────────────────────────
 
+
 class QueueAction(BaseAction):
     """Publish a message to a queue.
 
@@ -224,6 +225,7 @@ class QueueAction(BaseAction):
 
 
 # ─── Function Action ──────────────────────────────────────────────────────────
+
 
 class FunctionAction(BaseAction):
     """Call a local Python function by dotted module path.
@@ -282,6 +284,7 @@ class FunctionAction(BaseAction):
 
         try:
             import importlib
+
             mod = importlib.import_module(mod_name)
         except ImportError as exc:
             raise ActionError(
@@ -311,6 +314,7 @@ class FunctionAction(BaseAction):
 
 
 # ─── AI Action ────────────────────────────────────────────────────────────────
+
 
 class AiAction(BaseAction):
     """AI action — calls an LLM endpoint.
@@ -342,6 +346,7 @@ class AiAction(BaseAction):
         if provider == "stub":
             # Deterministic stub for demo purposes
             import hashlib
+
             stub_response = hashlib.sha256(f"{event.payload}".encode()).hexdigest()[:16]
             return ActionResult(
                 action_id=action.id,
@@ -375,6 +380,7 @@ class AiAction(BaseAction):
         if not api_key:
             # Fall back to stub so demos work without a key.
             import hashlib
+
             stub_response = hashlib.sha256(f"{event.payload}".encode()).hexdigest()[:16]
             log.info("No OPENAI_API_KEY set; using deterministic stub response")
             return ActionResult(
@@ -405,6 +411,7 @@ class AiAction(BaseAction):
         prompt = prompt.replace("{{type}}", event.type)
         # Replace {{payload.<key>}} references
         if "{{payload" in prompt:
+
             def _replacer(m):
                 key_path = m.group(1)
                 parts = key_path.split(".")[1:]  # skip "payload"
@@ -412,6 +419,7 @@ class AiAction(BaseAction):
                 for p in parts:
                     val = val.get(p, "") if isinstance(val, dict) else ""
                 return str(val)
+
             prompt = re.sub(r"\{\{payload\.([^}]+)\}\}", _replacer, prompt)
 
         messages = [{"role": "user", "content": prompt}]

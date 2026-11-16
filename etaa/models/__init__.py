@@ -51,6 +51,7 @@ class ExecutionStatus(StrEnum):
 
 # ─── EventEnvelope ───────────────────────────────────────────────────────────
 
+
 class EventEnvelope(BaseModel):
     """Canonical representation of any incoming event (webhook or queue message).
 
@@ -82,6 +83,7 @@ class EventEnvelope(BaseModel):
 
 
 # ─── RetryPolicy ─────────────────────────────────────────────────────────────
+
 
 class RetryPolicy(BaseModel):
     """Retry behaviour configuration for an action or entire workflow.
@@ -127,6 +129,7 @@ class RetryPolicy(BaseModel):
 
 # ─── DLQConfig ────────────────────────────────────────────────────────────────
 
+
 class DLQConfig(BaseModel):
     """Dead-letter queue configuration for a workflow.
 
@@ -152,6 +155,7 @@ class DLQConfig(BaseModel):
 
 
 # ─── ActionSpec ───────────────────────────────────────────────────────────────
+
 
 class ActionSpec(BaseModel):
     """Single step within a workflow definition.
@@ -185,6 +189,7 @@ class ActionSpec(BaseModel):
 
 # ─── WorkflowSpec ─────────────────────────────────────────────────────────────
 
+
 class WorkflowTrigger(BaseModel):
     """Matching rule that determines whether a workflow fires for a given event."""
 
@@ -201,9 +206,7 @@ class WorkflowTrigger(BaseModel):
             return False
         if event.type != self.type:
             return False
-        return all(
-            event.payload.get(key) == expected for key, expected in self.filters.items()
-        )
+        return all(event.payload.get(key) == expected for key, expected in self.filters.items())
 
 
 class WorkflowSpec(BaseModel):
@@ -228,9 +231,7 @@ class WorkflowSpec(BaseModel):
     triggers: list[WorkflowTrigger] = Field(
         default_factory=list, description="Trigger rules (OR logic)."
     )
-    actions: list[ActionSpec] = Field(
-        default_factory=list, description="Ordered list of actions."
-    )
+    actions: list[ActionSpec] = Field(default_factory=list, description="Ordered list of actions.")
     retry_policy: RetryPolicy = Field(
         default_factory=RetryPolicy, description="Default retry policy."
     )
@@ -244,6 +245,7 @@ class WorkflowSpec(BaseModel):
 
 
 # ─── RunRecord ────────────────────────────────────────────────────────────────
+
 
 class AttemptRecord(BaseModel):
     """Record of a single action attempt within a run."""

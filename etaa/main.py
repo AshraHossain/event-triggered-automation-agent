@@ -72,12 +72,15 @@ def load_workflows(path: str, router: EventRouter) -> list[WorkflowSpec]:
     if p.is_file():
         specs.append(_load_single(p))
     elif p.is_dir():
-        # First top-level, then recursive
-        for f in sorted(p.glob("*.yaml")) + sorted(p.glob("*.yml")):
-            specs.append(_load_single(f))
+        # rglob already covers the top level; dedupe by resolved path so a file
+        # is never loaded (and its workflow registered) twice.
+        seen: set[Path] = set()
         for f in sorted(p.rglob("*.yaml")) + sorted(p.rglob("*.yml")):
-            if f not in specs:  # avoid duplicates if rglob picks up top-level too
-                specs.append(_load_single(f))
+            resolved = f.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            specs.append(_load_single(f))
     else:
         raise FileNotFoundError(f"Workflows path not found: {path}")
 
@@ -93,6 +96,7 @@ def _load_single(path: Path) -> WorkflowSpec:
 
 
 # ─── CLI ──────────────────────────────────────────────────────────────────────
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="etaa", description="Event-Triggered Automation Agent")
@@ -130,6 +134,7 @@ def main() -> None:
 
 def _cmd_server(args: argparse.Namespace) -> None:
     import uvicorn
+
     app, _, _ = build_application(workflows_path=getattr(args, "workflows", None))
     uvicorn.run(app, host=args.host, port=args.port)
 
