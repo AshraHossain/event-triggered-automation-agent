@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
 import pytest
 
-from etaa.actions import HttpAction, QueueAction, FunctionAction, AiAction, ActionError
-from etaa.models import ActionSpec, ActionKind, EventEnvelope
+from etaa.actions import ActionError, AiAction, FunctionAction, HttpAction, QueueAction
+from etaa.models import ActionKind, ActionSpec, EventEnvelope
 
 
 @pytest.fixture
@@ -15,6 +14,7 @@ def sample_event():
 
 
 # ─── HttpAction ───────────────────────────────────────────────────────────────
+
 
 def test_http_action_fields(sample_event):
     """HttpAction has execute method and accepts ActionSpec + EventEnvelope."""
@@ -25,9 +25,14 @@ def test_http_action_fields(sample_event):
 
 # ─── FunctionAction ───────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_function_action_missing_module(sample_event):
-    action = ActionSpec(id="f1", type=ActionKind.FUNCTION, config={"module_path": "examples.nonexistent.module.func"})
+    action = ActionSpec(
+        id="f1",
+        type=ActionKind.FUNCTION,
+        config={"module_path": "examples.nonexistent.module.func"},
+    )
     fa = FunctionAction()
     with pytest.raises(ActionError, match="Cannot import module"):
         await fa.execute(action, sample_event)
@@ -35,9 +40,12 @@ async def test_function_action_missing_module(sample_event):
 
 # ─── QueueAction ──────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_queue_action_memory(sample_event):
-    action = ActionSpec(id="q1", type=ActionKind.QUEUE, config={"queue_name": "test-q", "backend": "memory"})
+    action = ActionSpec(
+        id="q1", type=ActionKind.QUEUE, config={"queue_name": "test-q", "backend": "memory"}
+    )
     qa = QueueAction()
     result = await qa.execute(action, sample_event)
     assert result.success is True
@@ -45,6 +53,7 @@ async def test_queue_action_memory(sample_event):
 
 
 # ─── AiAction ─────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_ai_action_stub(sample_event):

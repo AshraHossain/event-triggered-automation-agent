@@ -8,23 +8,21 @@ with respx so no real network calls are made.
 from __future__ import annotations
 
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 import respx
-import httpx
 
 # Ensure project root is on sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from etaa.actions import HttpAction, QueueAction, FunctionAction, AiAction, ActionError
+from etaa.actions import AiAction, FunctionAction, HttpAction, QueueAction
 from etaa.engine.event_router import EventRouter
 from etaa.engine.idempotency_manager import IdempotencyManager
 from etaa.engine.workflow_executor import WorkflowExecutor
-from etaa.ingress import WebhookIngress
 from etaa.models import (
     ActionKind,
     ActionSpec,
@@ -84,6 +82,7 @@ def full_pipeline(tmp_path):
 
 
 # ─── End-to-end: WebhookIngress → EventRouter → WorkflowExecutor ──────────────
+
 
 @pytest.mark.asyncio
 async def test_full_pipeline_http_success(full_pipeline):
@@ -237,7 +236,9 @@ async def test_full_pipeline_dlq_after_exhaustion(full_pipeline, tmp_path):
     )
     router.add_workflow(wf)
 
-    event = EventEnvelope(event_id="evt-dlq-1", source="demo", type="dlq_test", payload={"important": "data"})
+    event = EventEnvelope(
+        event_id="evt-dlq-1", source="demo", type="dlq_test", payload={"important": "data"}
+    )
 
     with respx.mock:
         respx.get("https://broken.example.com/api").respond(500)
@@ -273,6 +274,7 @@ async def test_full_pipeline_dag_ordering(full_pipeline):
         return {"called": True, "action_id": context["action_id"]}
 
     import types
+
     mod = types.ModuleType("examples.test_temp_handler")
     mod.test_fn = sync_fn
     sys.modules["examples.test_temp_handler"] = mod
@@ -368,7 +370,7 @@ async def test_full_pipeline_no_match(full_pipeline):
 
 @pytest.mark.asyncio
 async def test_http_action_template_substitution(full_pipeline):
-    """Template variables {{event_id}}, {{source}}, {{type}} should be substituted in URLs and body."""
+    """Template vars {{event_id}}, {{source}}, {{type}} are substituted in URL and body."""
     router = full_pipeline["router"]
     executor = full_pipeline["executor"]
 
@@ -386,7 +388,11 @@ async def test_http_action_template_substitution(full_pipeline):
                     "method": "POST",
                     "url": "https://api.example.com/webhook/{{source}}",
                     "headers": {"X-Event-ID": "{{event_id}}"},
-                    "body": {"event_id": "{{event_id}}", "source": "{{source}}", "type": "{{type}}"},
+                    "body": {
+                        "event_id": "{{event_id}}",
+                        "source": "{{source}}",
+                        "type": "{{type}}",
+                    },
                     "expected_status_codes": [200],
                 },
             ),
@@ -394,9 +400,12 @@ async def test_http_action_template_substitution(full_pipeline):
     )
     router.add_workflow(wf)
 
-    event = EventEnvelope(event_id="tmpl-evt-1", source="testsrc", type="tmpl", payload={"data": "hello"})
+    event = EventEnvelope(
+        event_id="tmpl-evt-1", source="testsrc", type="tmpl", payload={"data": "hello"}
+    )
 
     with respx.mock:
+
         def capture(request):
             captured_request["url"] = str(request.url)
             captured_request["headers"] = dict(request.headers)
@@ -493,6 +502,7 @@ async def test_http_action_payload_template_substitution(full_pipeline):
     )
 
     with respx.mock:
+
         def capture(request):
             captured_request["body"] = json.loads(request.content)
             return httpx.Response(200, json={"ok": True})

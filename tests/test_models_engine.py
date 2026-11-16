@@ -2,30 +2,31 @@
 
 from __future__ import annotations
 
-import pytest
 from datetime import datetime
 
+import pytest
+
+from etaa.engine.event_router import EventRouter
+from etaa.engine.idempotency_manager import IdempotencyManager
 from etaa.models import (
-    ActionKind,
+    BackoffStrategy,
     DLQConfig,
     DLQTargetKind,
     EventEnvelope,
     ExecutionStatus,
     RetryPolicy,
-    BackoffStrategy,
     RunRecord,
     WorkflowSpec,
     WorkflowTrigger,
 )
-from etaa.engine.event_router import EventRouter
-from etaa.engine.idempotency_manager import IdempotencyManager
-from etaa.engine.retry_dlq_manager import RetryDLQManager
-
 
 # ─── EventEnvelope ───────────────────────────────────────────────────────────
 
+
 def test_event_envelope_defaults():
-    evt = EventEnvelope(event_id="e1", source="stripe", type="payment_succeeded", payload={"amount": 100})
+    evt = EventEnvelope(
+        event_id="e1", source="stripe", type="payment_succeeded", payload={"amount": 100}
+    )
     assert evt.event_id == "e1"
     assert isinstance(evt.received_at, datetime)
 
@@ -38,31 +39,52 @@ def test_event_envelope_idempotency_key():
 
 # ─── WorkflowTrigger matching ────────────────────────────────────────────────
 
+
 def test_trigger_matches():
     trigger = WorkflowTrigger(source="stripe", type="payment_succeeded", filters={"success": True})
-    evt = EventEnvelope(event_id="e1", source="stripe", type="payment_succeeded", payload={"success": True})
+    evt = EventEnvelope(
+        event_id="e1", source="stripe", type="payment_succeeded", payload={"success": True}
+    )
     assert trigger.matches(evt) is True
 
-    evt_wrong_source = EventEnvelope(event_id="e1", source="github", type="payment_succeeded", payload={})
+    evt_wrong_source = EventEnvelope(
+        event_id="e1", source="github", type="payment_succeeded", payload={}
+    )
     assert trigger.matches(evt_wrong_source) is False
 
-    evt_wrong_filter = EventEnvelope(event_id="e1", source="stripe", type="payment_succeeded", payload={"success": False})
+    evt_wrong_filter = EventEnvelope(
+        event_id="e1", source="stripe", type="payment_succeeded", payload={"success": False}
+    )
     assert trigger.matches(evt_wrong_filter) is False
 
 
 def test_workflow_spec_or_semantics():
     wf = WorkflowSpec(
-        id="wf1", name="W1", triggers=[
+        id="wf1",
+        name="W1",
+        triggers=[
             WorkflowTrigger(source="stripe", type="payment_succeeded"),
             WorkflowTrigger(source="github", type="push"),
-        ], actions=[],
+        ],
+        actions=[],
     )
-    assert wf.matches(EventEnvelope(event_id="e1", source="stripe", type="payment_succeeded", payload={})) is True
-    assert wf.matches(EventEnvelope(event_id="e1", source="github", type="push", payload={})) is True
-    assert wf.matches(EventEnvelope(event_id="e1", source="slack", type="message", payload={})) is False
+    assert (
+        wf.matches(
+            EventEnvelope(event_id="e1", source="stripe", type="payment_succeeded", payload={})
+        )
+        is True
+    )
+    assert (
+        wf.matches(EventEnvelope(event_id="e1", source="github", type="push", payload={})) is True
+    )
+    assert (
+        wf.matches(EventEnvelope(event_id="e1", source="slack", type="message", payload={}))
+        is False
+    )
 
 
 # ─── RetryPolicy ──────────────────────────────────────────────────────────────
+
 
 def test_fixed_backoff():
     p = RetryPolicy(max_attempts=3, backoff_strategy=BackoffStrategy.FIXED, backoff_seconds=2.0)
@@ -71,7 +93,9 @@ def test_fixed_backoff():
 
 
 def test_exponential_backoff():
-    p = RetryPolicy(max_attempts=5, backoff_strategy=BackoffStrategy.EXPONENTIAL, backoff_seconds=1.0)
+    p = RetryPolicy(
+        max_attempts=5, backoff_strategy=BackoffStrategy.EXPONENTIAL, backoff_seconds=1.0
+    )
     assert p.compute_delay(1) == 1.0
     assert p.compute_delay(2) == 2.0
     assert p.compute_delay(3) == 4.0
@@ -80,7 +104,7 @@ def test_exponential_backoff():
 
 def test_should_retry():
     p = RetryPolicy(max_attempts=2, retryable_error_codes=["timeout", 500])
-    assert p.should_retry(None, 1) is True   # generic exception → retry
+    assert p.should_retry(None, 1) is True  # generic exception → retry
     assert p.should_retry("timeout", 1) is True
     assert p.should_retry(500, 1) is True
     assert p.should_retry(404, 1) is False
@@ -88,6 +112,7 @@ def test_should_retry():
 
 
 # ─── IdempotencyManager ───────────────────────────────────────────────────────
+
 
 def test_idempotency_detects_duplicate():
     mgr = IdempotencyManager(ttl_seconds=60)
@@ -111,10 +136,15 @@ def test_idempotency_different_event():
 
 # ─── EventRouter ──────────────────────────────────────────────────────────────
 
+
 def test_router_matches_multiple():
     router = EventRouter()
-    wf1 = WorkflowSpec(id="w1", name="W1", triggers=[WorkflowTrigger(source="s", type="t1")], actions=[])
-    wf2 = WorkflowSpec(id="w2", name="W2", triggers=[WorkflowTrigger(source="s", type="t1")], actions=[])
+    wf1 = WorkflowSpec(
+        id="w1", name="W1", triggers=[WorkflowTrigger(source="s", type="t1")], actions=[]
+    )
+    wf2 = WorkflowSpec(
+        id="w2", name="W2", triggers=[WorkflowTrigger(source="s", type="t1")], actions=[]
+    )
     router.add_workflow(wf1)
     router.add_workflow(wf2)
     evt = EventEnvelope(event_id="e1", source="s", type="t1", payload={})
@@ -125,12 +155,17 @@ def test_router_matches_multiple():
 
 def test_router_no_match():
     router = EventRouter()
-    router.add_workflow(WorkflowSpec(id="w1", name="W1", triggers=[WorkflowTrigger(source="a", type="b")], actions=[]))
+    router.add_workflow(
+        WorkflowSpec(
+            id="w1", name="W1", triggers=[WorkflowTrigger(source="a", type="b")], actions=[]
+        )
+    )
     evt = EventEnvelope(event_id="e1", source="x", type="y", payload={})
     assert router.resolve(evt) == []
 
 
 # ─── DLQConfig ────────────────────────────────────────────────────────────────
+
 
 def test_dlq_defaults():
     cfg = DLQConfig()
@@ -140,6 +175,7 @@ def test_dlq_defaults():
 
 
 # ─── RunRecord ────────────────────────────────────────────────────────────────
+
 
 def test_run_record_finish():
     rec = RunRecord(run_id="r1", event_id="e1", workflow_id="w1", status=ExecutionStatus.RUNNING)
