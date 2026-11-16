@@ -11,7 +11,9 @@ paths:
    within a single trigger.
 3. `depends_on` must form a DAG; a cycle fails the run (it is no longer silently
    reordered). An action cannot depend on itself.
-4. Template placeholders in action config: `{{event_id}}`, `{{source}}`, `{{type}}`, and
-   `{{payload.<dotted.path>}}`.
-5. Keep secrets out of specs — reference credentials via headers/env at runtime, never
-   inline.
+4. Template placeholders: `{{event_id}}`, `{{source}}`, `{{type}}`,
+   `{{payload.<dotted.path>}}`, `{{steps.<action_id>.<path>}}` and
+   `{{env.ETAA_SECRET_<NAME>}}`.
+5. Never put a token in a spec. Reference it as `{{env.ETAA_SECRET_<NAME>}}`.
+6. `ai` actions that feed later steps must set `labels` (and usually `default_label`).
+7. DLQ targets: `file` or `db` (SQLite). `queue` only falls back to a file.

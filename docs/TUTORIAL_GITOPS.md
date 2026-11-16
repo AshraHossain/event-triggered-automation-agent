@@ -2,9 +2,11 @@
 
 ## Overview
 
-Triggered by GitHub `push` events to `refs/heads/main`, this workflow starts a CI pipeline (local function stub) and notifies the team on Slack (HTTP POST to webhook URL). Slack retries use fixed backoff; failures land in an in-memory DLQ queue.
+Triggered by GitHub `push` events to `refs/heads/main`, this workflow starts a CI pipeline
+(local function) and notifies the team on Slack (HTTP). Slack retries use fixed backoff;
+exhausted retries are written to `./data/dlq/gitops.jsonl`.
 
-## Key Config Highlights
+## Key config
 
 ```yaml
 triggers:
@@ -33,12 +35,11 @@ actions:
 ## Run
 
 ```bash
-PYTHONPATH=. python examples/gitops_automation/demo.py
+PYTHONPATH=. uv run python examples/gitops_automation/demo.py
 ```
 
-The second sample event has `ref: refs/heads/feature/auth` and is correctly ignored (0 matching workflows).
+## Expected behaviour
 
-## Expected Behaviour
-
-1. `evt_git_001` matches → `start_ci` succeeds (stub returns pipeline ID) → `notify_slack` fails (fake URL, 404) → workflow marked `failed`.
-2. `evt_git_002` does NOT match (branch filter) → no workflows run.
+1. `evt_git_001` (push to `main`) matches → `start_ci` returns a pipeline id → `notify_slack`
+   is sent to the demo's mock endpoint → run ends in `success`.
+2. `evt_git_002` (push to `feature/auth`) does not match the branch filter → no workflow runs.
