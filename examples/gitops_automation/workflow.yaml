@@ -2,14 +2,14 @@
 # Triggered by GitHub push events.
 # Actions: start CI job (function) → notify Slack (HTTP).
 # Retry: fixed backoff for Slack notifications.
-# DLQ: in-memory queue for failed notifications.
+# DLQ: JSONL file (./data/dlq/gitops.jsonl).
 
 id: gitops-automation
 name: GitOps Automation
 description: >
   Reacts to GitHub push events by kicking off a CI pipeline and notifying
   the team on Slack.  Slack notifications are retried with fixed backoff;
-  exhausted retries land in the DLQ queue.
+  exhausted retries land in the dead-letter file.
 
 triggers:
   - source: github
@@ -51,8 +51,8 @@ retry_policy:
   backoff_seconds: 1.0
 
 dlq:
-  target_type: queue
+  target_type: file
   target_config:
-    queue_name: gitops-failed-notifications
+    path: ./data/dlq/gitops.jsonl
   include_payload: true
   include_error: true
