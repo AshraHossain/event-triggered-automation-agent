@@ -24,7 +24,7 @@ log = setup_logger(__name__)
 
 # Only env vars with this prefix can be read from a workflow spec, so a spec
 # cannot exfiltrate arbitrary process environment (API keys, signing secrets).
-SECRET_ENV_PREFIX = "ETAA_SECRET_"
+SECRET_ENV_PREFIX = "ETAA_SECRET_"  # nosec B105
 
 _PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z_][\w.\-]*)\s*\}\}")
 _EVENT_FIELDS = ("event_id", "source", "type")

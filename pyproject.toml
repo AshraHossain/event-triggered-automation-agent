@@ -10,7 +10,7 @@ readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.11"
 authors = [
-    {name = "ETAA Contributors"}
+    {name = "Ashrafuzzaman Hossain"}
 ]
 keywords = ["event-driven", "automation", "webhooks", "workflows", "idempotency", "retry", "dead-letter-queue"]
 classifiers = [
@@ -29,7 +29,6 @@ dependencies = [
     "httpx>=0.27.0",
     "pyyaml>=6.0.1",
     "pydantic>=2.7.0",
-    "pydantic-settings>=2.2.0",
 ]
 
 [project.optional-dependencies]
@@ -39,6 +38,12 @@ dev = [
     "pytest-cov>=4.1.0",
     "httpx>=0.27.0",
     "respx>=0.21.0",
+    "ruff>=0.6.0",
+    "black>=24.0.0",
+    "mypy>=1.11.0",
+    "types-PyYAML>=6.0.0",
+    "bandit>=1.7.0",
+    "pip-audit>=2.7.0",
 ]
 ai = [
     "anthropic>=0.28.0",
@@ -78,6 +83,11 @@ exclude_lines = [
 [tool.black]
 line-length = 99
 target-version = ["py311"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_unused_ignores = true
 
 [tool.ruff]
 target-version = "py311"

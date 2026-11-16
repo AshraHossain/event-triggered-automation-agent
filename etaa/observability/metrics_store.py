@@ -41,7 +41,7 @@ class MetricsStore:
             self._connect_db(persist_path)
 
     def _connect_db(self, path: str) -> None:
-        self._conn = sqlite3.connect(path)
+        self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.execute("""
             CREATE TABLE IF NOT EXISTS metrics (
                 wf_id   TEXT,
@@ -84,24 +84,27 @@ class MetricsStore:
             self._flush_latency(workflow_id, elapsed_seconds)
 
     def _flush_counter(self, wf: str, metric: str, value: int) -> None:
-        try:
-            self._conn.execute(
-                "INSERT INTO metrics (wf_id, metric, value, ts) VALUES (?, ?, ?, ?)",
-                (wf, metric, value, datetime.now(UTC).isoformat()),
-            )
-            self._conn.commit()
-        except Exception as exc:  # pragma: no cover — defensive
-            log.warning("Failed to flush counter", exc_info=exc)
+        self._flush(
+            "INSERT INTO metrics (wf_id, metric, value, ts) VALUES (?, ?, ?, ?)",
+            (wf, metric, value, datetime.now(UTC).isoformat()),
+        )
 
     def _flush_latency(self, wf: str, elapsed: float) -> None:
+        self._flush(
+            "INSERT INTO latencies (wf_id, elapsed, ts) VALUES (?, ?, ?)",
+            (wf, elapsed, datetime.now(UTC).isoformat()),
+        )
+
+    def _flush(self, sql: str, params: tuple[Any, ...]) -> None:
+        """Best-effort persistence: a metrics write must never fail a workflow run."""
+        if self._conn is None:
+            return
         try:
-            self._conn.execute(
-                "INSERT INTO latencies (wf_id, elapsed, ts) VALUES (?, ?, ?)",
-                (wf, elapsed, datetime.now(UTC).isoformat()),
-            )
-            self._conn.commit()
-        except Exception as exc:
-            log.warning("Failed to flush latency", exc_info=exc)
+            with self._lock:
+                self._conn.execute(sql, params)
+                self._conn.commit()
+        except sqlite3.Error as exc:
+            log.warning("Failed to persist metric: %s", exc)
 
     def snapshot(self) -> dict[str, Any]:
         """Return a full snapshot of current counters and latency stats."""
