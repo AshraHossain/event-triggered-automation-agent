@@ -140,10 +140,9 @@ When retries are exhausted, the event is routed to the `DLQConfig` target:
 ### Install
 
 ```bash
-git clone https://github.com/your-org/event-triggered-automation-agent.git
+git clone https://github.com/AshraHossain/event-triggered-automation-agent.git
 cd event-triggered-automation-agent
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
+uv venv && uv pip install -e ".[dev]"   # or: python -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"
 ```
 
 ### Run the webhook server
@@ -183,9 +182,12 @@ curl http://localhost:8000/api/v1/runs
 ### CLI: run a single event file
 
 ```bash
-echo '{"id":"e1","source":"stripe","type":"payment_succeeded","data":{"amount":100}}' > /tmp/event.json
+echo '{"id":"e1","source":"stripe","type":"payment_succeeded","data":{"amount":100,"success":true}}' > /tmp/event.json
 python -m etaa.main run /tmp/event.json --workflows examples/payment_webhook/
 ```
+
+> The payment workflow trigger filters on `success: true`, so the event must include
+> it to match.
 
 ## Examples
 
@@ -200,6 +202,10 @@ Run any demo:
 PYTHONPATH=. python examples/payment_webhook/demo.py
 ```
 
+> Demo workflows POST to placeholder URLs, so without a reachable endpoint the HTTP
+> actions fail and runs end in `failed`/`dlq` — this is intentional and exercises the
+> retry and dead-letter paths.
+
 ## Benchmarks
 
 ```bash
@@ -207,6 +213,31 @@ PYTHONPATH=. python benchmark.py --workflows examples/ --iterations 10
 ```
 
 Outputs a Markdown table + `benchmark_results.json` with per-workflow latency and throughput numbers.
+
+## Security Configuration
+
+ETAA ships with two opt-in controls, both configured via environment variables:
+
+| Variable | Purpose |
+|---|---|
+| `ETAA_WEBHOOK_SECRET` | Global HMAC-SHA256 secret for webhook signature verification. |
+| `ETAA_WEBHOOK_SECRET_<SOURCE>` | Per-source secret (e.g. `ETAA_WEBHOOK_SECRET_STRIPE`). Takes precedence over the global. |
+| `ETAA_WEBHOOK_UNSIGNED_SOURCES` | Comma-separated sources allowed to skip signing. |
+| `ETAA_FUNCTION_ALLOWLIST` | Comma-separated module prefixes the `function` action may import (default `examples.,etaa.`). |
+
+When any webhook secret is configured, requests must carry a valid
+`X-ETAA-Signature: sha256=<hex>` header; sources without a usable secret are rejected
+(**fail closed**) unless listed in `ETAA_WEBHOOK_UNSIGNED_SOURCES`. The signature is an
+HMAC-SHA256 of the raw request body, compared in constant time.
+
+```bash
+# Example: compute a signature for a payload
+SECRET=shh
+BODY='{"id":"e1","type":"payment_succeeded","data":{"success":true}}'
+SIG="sha256=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $2}')"
+curl -X POST http://localhost:8000/api/v1/webhook/stripe \
+  -H "Content-Type: application/json" -H "X-ETAA-Signature: $SIG" -d "$BODY"
+```
 
 ## Contribution Guide
 

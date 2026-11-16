@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +38,8 @@ class RunHistoryStore:
 
     def _connect_db(self, db_path: str) -> None:
         self._conn = sqlite3.connect(db_path)
+        # Row factory lets _row_to_record read columns by name via dict(row).
+        self._conn.row_factory = sqlite3.Row
         self._conn.execute("""
             CREATE TABLE IF NOT EXISTS runs (
                 run_id      TEXT PRIMARY KEY,
@@ -76,8 +78,10 @@ class RunHistoryStore:
         try:
             self._conn.execute(
                 """INSERT OR REPLACE INTO runs
-                   (run_id, event_id, workflow_id, status, attempts, started_at, finished_at, metrics, action_logs)
-                   VALUES (:run_id, :event_id, :workflow_id, :status, :attempts, :started_at, :finished_at, :metrics, :action_logs)""",
+                   (run_id, event_id, workflow_id, status, attempts,
+                    started_at, finished_at, metrics, action_logs)
+                   VALUES (:run_id, :event_id, :workflow_id, :status, :attempts,
+                           :started_at, :finished_at, :metrics, :action_logs)""",
                 row,
             )
             self._conn.commit()
@@ -138,6 +142,9 @@ class RunHistoryStore:
     @staticmethod
     def _row_to_record(row: dict[str, Any]) -> RunRecord:
         from ..models import AttemptRecord, ExecutionStatus
+
+        finished = row.get("finished_at")
+        raw_logs = json.loads(row["action_logs"]) if row.get("action_logs") else []
         return RunRecord(
             run_id=row["run_id"],
             event_id=row["event_id"],
@@ -145,9 +152,9 @@ class RunHistoryStore:
             status=ExecutionStatus(row["status"]),
             attempts=row["attempts"],
             started_at=datetime.fromisoformat(row["started_at"]),
-            finished_at=datetime.fromisoformat(row["finished_at"]) if row.get("finished_at") else None,
+            finished_at=datetime.fromisoformat(finished) if finished else None,
             metrics=json.loads(row["metrics"]) if row.get("metrics") else {},
-            action_logs=[AttemptRecord(**a) for a in (json.loads(row["action_logs"]) if row.get("action_logs") else [])],
+            action_logs=[AttemptRecord(**a) for a in raw_logs],
         )
 
     def close(self) -> None:

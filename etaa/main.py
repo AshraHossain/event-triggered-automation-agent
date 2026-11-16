@@ -5,24 +5,25 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import sys
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from .actions import AiAction, FunctionAction, HttpAction, QueueAction
 from .engine.event_router import EventRouter
+from .engine.idempotency_manager import get_idempotency_manager
 from .engine.workflow_executor import WorkflowExecutor
-from .ingress import WebhookIngress, make_queue_ingress
+from .ingress import WebhookIngress
 from .ingress.webhook_server import create_app
 from .models import WorkflowSpec
-from .observability.metrics_store import MetricsStore, get_metrics_store
-from .observability.run_history_store import RunHistoryStore, get_run_history
-from .engine.idempotency_manager import IdempotencyManager, get_idempotency_manager
-from .actions import HttpAction, QueueAction, FunctionAction, AiAction
+from .observability.metrics_store import get_metrics_store
+from .observability.run_history_store import get_run_history
 
 
-def build_application(workflows_path: str | None = None) -> tuple[Any, EventRouter, WorkflowExecutor]:
+def build_application(
+    workflows_path: str | None = None,
+) -> tuple[Any, EventRouter, WorkflowExecutor]:
     """Build the full ETAA application with all components wired together.
 
     Parameters
@@ -35,7 +36,6 @@ def build_application(workflows_path: str | None = None) -> tuple[Any, EventRout
     -------
     app, router, executor
     """
-    from fastapi import FastAPI  # lazy import to avoid hard dep at module level
 
     metrics = get_metrics_store()
     history = get_run_history()
@@ -72,12 +72,15 @@ def load_workflows(path: str, router: EventRouter) -> list[WorkflowSpec]:
     if p.is_file():
         specs.append(_load_single(p))
     elif p.is_dir():
-        # First top-level, then recursive
-        for f in sorted(p.glob("*.yaml")) + sorted(p.glob("*.yml")):
-            specs.append(_load_single(f))
+        # rglob already covers the top level; dedupe by resolved path so a file
+        # is never loaded (and its workflow registered) twice.
+        seen: set[Path] = set()
         for f in sorted(p.rglob("*.yaml")) + sorted(p.rglob("*.yml")):
-            if f not in specs:  # avoid duplicates if rglob picks up top-level too
-                specs.append(_load_single(f))
+            resolved = f.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            specs.append(_load_single(f))
     else:
         raise FileNotFoundError(f"Workflows path not found: {path}")
 
@@ -93,6 +96,7 @@ def _load_single(path: Path) -> WorkflowSpec:
 
 
 # ─── CLI ──────────────────────────────────────────────────────────────────────
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="etaa", description="Event-Triggered Automation Agent")
@@ -130,6 +134,7 @@ def main() -> None:
 
 def _cmd_server(args: argparse.Namespace) -> None:
     import uvicorn
+
     app, _, _ = build_application(workflows_path=getattr(args, "workflows", None))
     uvicorn.run(app, host=args.host, port=args.port)
 

@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import random
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from etaa.models import EventEnvelope
-
 
 OWNER_POOL = ["alice-support", "bob-tech", "carol-billing", "dave-general"]
 
@@ -28,7 +27,10 @@ def assign_owner(event: EventEnvelope, context: dict[str, Any]) -> dict[str, Any
         "ticket_id": event.payload.get("ticket_id", "unknown"),
         "category": classification,
         "assigned_to": owner,
-        "assigned_at": datetime.utcnow().isoformat(),
+        "assigned_at": datetime.now(UTC).isoformat(),
     }
-    print(f"[Support] Ticket {result['ticket_id']} categorized as '{classification}', assigned to {owner}")
+    print(
+        f"[Support] Ticket {result['ticket_id']} categorized as "
+        f"'{classification}', assigned to {owner}"
+    )
     return result

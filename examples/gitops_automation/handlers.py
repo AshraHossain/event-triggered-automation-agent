@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from etaa.models import EventEnvelope
@@ -22,7 +22,7 @@ def start_ci(event: EventEnvelope, context: dict[str, Any]) -> dict[str, Any]:
         "repo": repo,
         "branch": branch,
         "commit": commit,
-        "triggered_at": datetime.utcnow().isoformat(),
+        "triggered_at": datetime.now(UTC).isoformat(),
     }
     print(f"[CI] Pipeline {pipeline_id} triggered for {repo}@{branch} ({commit[:8]})")
     return result

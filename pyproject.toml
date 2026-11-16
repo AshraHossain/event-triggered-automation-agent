@@ -59,6 +59,25 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "unit: fast, isolated unit tests",
+    "integration: multi-component / HTTP-layer tests",
+]
+
+[tool.coverage.run]
+source = ["etaa"]
+omit = ["etaa/__main__.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+]
+
+[tool.black]
+line-length = 99
+target-version = ["py311"]
 
 [tool.ruff]
 target-version = "py311"

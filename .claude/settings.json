@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh repo list *)",
+      "Bash(command -v *)",
+      "Bash(env)",
+      "Bash(sysctl -n *)",
+      "Bash(ruff check .)",
+      "Bash(docker info *)",
+      "Bash(gh search *)",
+      "Bash(npm -v)",
+      "Bash(ruff format --check *)",
+      "Bash(pip3 list *)",
+      "Bash(black --check *)",
+      "Bash(docker version *)",
+      "Bash(ollama list)",
+      "Bash(printenv)",
+      "mcp__claude-in-chrome__tabs_context_mcp",
+      "mcp__Claude_Browser__read_page",
+      "mcp__Claude_Browser__get_page_text",
+      "mcp__Claude_Browser__find",
+      "mcp__Claude_Browser__read_console_messages",
+      "mcp__ccd_pr__get_status"
+    ]
+  }
+}

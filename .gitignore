@@ -16,3 +16,5 @@ graphify-out/
 .claude-flow/
 .claude/settings.local.json
 .env
+
+uv.lock

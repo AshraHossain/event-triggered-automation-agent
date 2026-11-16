@@ -6,12 +6,10 @@ for a real backend (Redis, Prometheus, etc.) later.
 
 from __future__ import annotations
 
-import json
 import sqlite3
 import threading
 from collections import defaultdict
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import UTC, datetime
 from typing import Any
 
 from ..observability.logger import setup_logger
@@ -76,7 +74,7 @@ class MetricsStore:
         try:
             self._conn.execute(
                 "INSERT INTO metrics (wf_id, metric, value, ts) VALUES (?, ?, ?, ?)",
-                (wf, metric, value, datetime.now(timezone.utc).isoformat()),
+                (wf, metric, value, datetime.now(UTC).isoformat()),
             )
             self._conn.commit()
         except Exception as exc:  # pragma: no cover — defensive
@@ -86,7 +84,7 @@ class MetricsStore:
         try:
             self._conn.execute(
                 "INSERT INTO latencies (wf_id, elapsed, ts) VALUES (?, ?, ?)",
-                (wf, elapsed, datetime.now(timezone.utc).isoformat()),
+                (wf, elapsed, datetime.now(UTC).isoformat()),
             )
             self._conn.commit()
         except Exception as exc:

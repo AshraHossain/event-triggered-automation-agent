@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Iterable
-
 from ..models import EventEnvelope, WorkflowSpec
 from ..observability.logger import setup_logger
 
@@ -39,7 +37,13 @@ class EventRouter:
         for wf in self._workflows:
             if wf.matches(event):
                 matched.append(wf)
-        log.info("Event %s (%s:%s) matched %d workflow(s)", event.event_id, event.source, event.type, len(matched))
+        log.info(
+            "Event %s (%s:%s) matched %d workflow(s)",
+            event.event_id,
+            event.source,
+            event.type,
+            len(matched),
+        )
         return matched
 
     def remove_workflow(self, workflow_id: str) -> bool:
