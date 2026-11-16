@@ -31,10 +31,11 @@ def _table(name: str) -> str:
 
 
 def _connect(db_path: str, table: str) -> sqlite3.Connection:
+    name = _table(table)  # validate before opening, so a bad name leaks no connection
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.execute(
-        f"CREATE TABLE IF NOT EXISTS {_table(table)} "
+        f"CREATE TABLE IF NOT EXISTS {name} "
         "(id INTEGER PRIMARY KEY AUTOINCREMENT, record TEXT NOT NULL)"
     )
     return conn

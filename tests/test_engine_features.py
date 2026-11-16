@@ -132,21 +132,72 @@ async def test_non_retryable_error_is_not_retried(make_executor, tmp_path):
     assert "private or loopback" in run.action_logs[0].error
 
 
-async def test_dependency_cycle_fails_the_run(make_executor):
-    executor, router, _ = make_executor()
-    router.add_workflow(
-        WorkflowSpec(
-            id="wf",
-            name="wf",
-            triggers=[WorkflowTrigger(source="s", type="t")],
-            actions=[
+def _spec(actions: list[ActionSpec]) -> WorkflowSpec:
+    return WorkflowSpec(
+        id="wf", name="wf", triggers=[WorkflowTrigger(source="s", type="t")], actions=actions
+    )
+
+
+def test_workflow_graph_is_validated_at_load_time():
+    with pytest.raises(ValueError, match="dependency cycle"):
+        _spec(
+            [
                 ActionSpec(id="a", type=ActionKind.QUEUE, depends_on=["b"]),
                 ActionSpec(id="b", type=ActionKind.QUEUE, depends_on=["a"]),
-            ],
+            ]
         )
+    with pytest.raises(ValueError, match="unknown actions"):
+        _spec([ActionSpec(id="a", type=ActionKind.QUEUE, depends_on=["ghost"])])
+    with pytest.raises(ValueError, match="duplicate action ids"):
+        _spec([ActionSpec(id="a", type=ActionKind.QUEUE), ActionSpec(id="a", type=ActionKind.AI)])
+
+
+async def test_graph_mutated_after_validation_still_fails_the_run(make_executor):
+    """Defence in depth: the executor re-checks the graph it is about to run."""
+    executor, router, _ = make_executor()
+    wf = _spec(
+        [ActionSpec(id="a", type=ActionKind.QUEUE), ActionSpec(id="b", type=ActionKind.QUEUE)]
     )
+    wf.actions[0].depends_on.append("b")
+    wf.actions[1].depends_on.append("a")
+    router.add_workflow(wf)
     (run,) = await executor.execute(_event())
     assert run.status == ExecutionStatus.FAILED
+
+
+async def test_retry_resumes_at_the_failed_action(make_executor, tmp_path):
+    """A completed step is not repeated when the same event is processed again."""
+    calls: list[str] = []
+    healthy = {"crm": False}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        if request.url.path == "/crm" and not healthy["crm"]:
+            return httpx.Response(500)
+        return httpx.Response(200, json={"ok": True})
+
+    executor, router, _ = make_executor(httpx.MockTransport(handler))
+
+    def http(action_id: str, path: str, deps: list[str]) -> ActionSpec:
+        config = {"method": "POST", "url": f"https://api.example.com{path}"}
+        return ActionSpec(id=action_id, type=ActionKind.HTTP, config=config, depends_on=deps)
+
+    wf = _spec([http("email", "/email", []), http("crm", "/crm", ["email"])])
+    wf.retry_policy.max_attempts = 1
+    wf.dlq.target_config["path"] = str(tmp_path / "dlq.jsonl")
+    router.add_workflow(wf)
+
+    (first,) = await executor.execute(_event())
+    assert first.status == ExecutionStatus.FAILED
+    healthy["crm"] = True
+    (second,) = await executor.execute(_event())  # redelivery / replay
+
+    assert second.status == ExecutionStatus.SUCCESS
+    assert [log.status for log in second.action_logs] == ["resumed", "success"]
+    assert calls == ["/email", "/crm", "/crm"]  # the email was sent exactly once
+    # Checkpoints are cleared on success: a fresh event id runs every step.
+    await executor.execute(_event("e2"))
+    assert calls.count("/email") == 2
 
 
 def test_action_cannot_depend_on_itself():
@@ -246,3 +297,43 @@ def test_idempotency_ttl_expiry():
     mgr = IdempotencyManager(ttl_seconds=-1)  # everything is already expired
     assert mgr.check_and_set("wf", "e1") is False
     assert mgr.check_and_set("wf", "e1") is False
+
+
+def test_state_stores_persist_in_sqlite(tmp_path):
+    from etaa.engine.state_store import CheckpointStore, Inbox
+
+    db = str(tmp_path / "state.db")
+    writer = CheckpointStore(db)
+    writer.save("wf", "e1", "email", {"status": 200})
+    writer.close()
+    reopened = CheckpointStore(db)  # a new process sees the completed step
+    assert reopened.load("wf", "e1") == {"email": {"status": 200}}
+    reopened.clear("wf", "e1")
+    assert reopened.load("wf", "e1") == {}
+    reopened.close()
+
+    event = EventEnvelope(event_id="e1", source="s", type="t", payload={"k": 1})
+    first = Inbox(db)
+    first.put(event)
+    first.put(event)  # a duplicate delivery is stored once
+    first.close()
+    reopened_inbox = Inbox(db)
+    assert [e.event_id for e in reopened_inbox.pending()] == ["e1"]
+    reopened_inbox.done(event)
+    assert reopened_inbox.pending() == []
+    reopened_inbox.close()
+
+
+async def test_replay_counts_duplicate_dead_letters_as_skipped(make_executor, tmp_path):
+    """Two dead letters for the same event: the second is already done, not a failure."""
+    path = tmp_path / "dlq.jsonl"
+    dlq = DLQConfig(target_config={"path": str(path)})
+    record = {
+        "workflow_id": "wf",
+        "event": {"event_id": "e1", "source": "s", "type": "t", "payload": {}},
+    }
+    path.write_text((json.dumps(record) + "\n") * 2)
+    executor, router, _ = make_executor(_transport(200))
+    router.add_workflow(_http_wf(dlq))
+    counts = await replay_dlq(executor, str(path))
+    assert counts == {"replayed": 1, "succeeded": 1, "failed": 0, "skipped": 1}

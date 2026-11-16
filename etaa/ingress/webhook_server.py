@@ -3,22 +3,31 @@
 Guardrails applied before any workflow runs: per-client rate limit (429), body
 size cap (413), HMAC signature + timestamp verification (401), and JSON
 validation (400). Read endpoints can be protected with an API key.
+
+A webhook is acknowledged with 202 as soon as the event is recorded in the
+inbox; the workflows then run in the background, so a slow downstream (or a
+retry backoff) never makes the sender time out and redeliver. ``?wait=true``
+runs synchronously and returns the run statuses instead.
 """
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import json
 import os
 import threading
 import time
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
+from starlette.background import BackgroundTask
 
 from ..engine.event_router import EventRouter
+from ..engine.state_store import Inbox
 from ..engine.workflow_executor import WorkflowExecutor
 from ..ingress import (
     WebhookIngress,
@@ -28,6 +37,7 @@ from ..ingress import (
     verify_signature,
     webhook_secret,
 )
+from ..models import EventEnvelope, WorkflowSpec
 from ..observability.logger import setup_logger
 
 log = setup_logger(__name__)
@@ -38,6 +48,7 @@ API_KEY_HEADER = "X-API-Key"
 DEFAULT_MAX_BODY_BYTES = 1_048_576  # 1 MiB
 DEFAULT_RATE_LIMIT_PER_MINUTE = 600
 MAX_RUNS_PAGE = 500
+DEFAULT_MAX_IN_FLIGHT = 1000
 
 
 class RateLimiter:
@@ -125,32 +136,60 @@ def require_api_key(request: Request) -> None:
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    log.info("ETAA webhook server starting")
-    yield
-    log.info("ETAA webhook server shutting down")
-
-
 def create_app(
     executor: WorkflowExecutor,
     router: EventRouter,
     ingress: WebhookIngress | None = None,
     prefix: str = "/api/v1",
+    inbox: Inbox | None = None,
 ) -> FastAPI:
-    """Create the FastAPI application around *executor* and *router*."""
+    """Create the FastAPI application around *executor* and *router*.
+
+    Pass a SQLite-backed ``inbox`` to make accepted events survive a restart.
+    """
+    wh_ingress = ingress or WebhookIngress()
+    event_inbox = inbox or Inbox()
+    limiter = RateLimiter()
+    read_auth = [Depends(require_api_key)]
+    in_flight: set[str] = set()
+    recovery_tasks: set[asyncio.Task[None]] = set()
+
+    async def process(event: EventEnvelope, workflows: list[WorkflowSpec]) -> None:
+        """Run *workflows* for *event*, then clear it from the inbox."""
+        try:
+            for wf in workflows:
+                await executor.run_workflow(wf, event)
+        except Exception:
+            # Keep the inbox entry so the event is retried on the next start.
+            log.exception("Background processing failed for event %s", event.event_id)
+            return
+        finally:
+            in_flight.discard(event.event_id)
+        event_inbox.done(event)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        # Resume events that were acknowledged but not finished before the last stop.
+        for event in event_inbox.pending():
+            log.info("Resuming unfinished event %s from the inbox", event.event_id)
+            task = asyncio.create_task(process(event, router.resolve(event)))
+            recovery_tasks.add(task)
+            task.add_done_callback(recovery_tasks.discard)
+        log.info("ETAA webhook server starting")
+        yield
+        if recovery_tasks:
+            await asyncio.gather(*recovery_tasks, return_exceptions=True)
+        log.info("ETAA webhook server shutting down")
+
     app = FastAPI(
         title="ETAA — Event-Triggered Automation Agent",
         description=(
             "Vendor-agnostic event orchestration layer with idempotent "
             "execution, retry logic, and dead-letter handling."
         ),
-        version="0.1.0",
+        version="0.2.0",
         lifespan=lifespan,
     )
-    wh_ingress = ingress or WebhookIngress()
-    limiter = RateLimiter()
-    read_auth = [Depends(require_api_key)]
 
     def rate_limit(request: Request) -> None:
         limit = _env_int("ETAA_RATE_LIMIT_PER_MINUTE", DEFAULT_RATE_LIMIT_PER_MINUTE)
@@ -158,11 +197,29 @@ def create_app(
         if limit > 0 and not limiter.allow(client, limit):
             raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
-    async def dispatch(body: dict[str, Any]) -> JSONResponse:
+    async def dispatch(body: dict[str, Any], wait: bool) -> JSONResponse:
         event = await wh_ingress.ingest(body)
-        runs = await executor.execute(event)
+        workflows = router.resolve(event)
+        if wait:
+            runs = [await executor.run_workflow(wf, event) for wf in workflows]
+            return JSONResponse(
+                content={"event_id": event.event_id, "runs": [r.status.value for r in runs]}
+            )
+        accepted = {
+            "event_id": event.event_id,
+            "status": "accepted",
+            "workflows": [wf.id for wf in workflows],
+        }
+        if not workflows:
+            return JSONResponse(status_code=202, content=accepted)
+        if len(in_flight) >= _env_int("ETAA_MAX_IN_FLIGHT", DEFAULT_MAX_IN_FLIGHT):
+            raise HTTPException(
+                status_code=503, detail="Too many events in flight", headers={"Retry-After": "5"}
+            )
+        event_inbox.put(event)  # durable before we acknowledge
+        in_flight.add(event.event_id)
         return JSONResponse(
-            content={"event_id": event.event_id, "runs": [r.status.value for r in runs]}
+            status_code=202, content=accepted, background=BackgroundTask(process, event, workflows)
         )
 
     @app.get(f"{prefix}/health")
@@ -170,16 +227,16 @@ def create_app(
         return {"status": "ok", "workflows_registered": router.workflow_count}
 
     @app.post(f"{prefix}/webhook/{{source}}", dependencies=[Depends(rate_limit)])
-    async def handle_webhook(source: str, request: Request) -> JSONResponse:
+    async def handle_webhook(source: str, request: Request, wait: bool = False) -> JSONResponse:
         """Accept a webhook for *source* (from the URL path) and dispatch it."""
         raw = await _read_body(request)
         _verify(source, raw, request)
         body = _parse_body(raw)
         body["source"] = source  # path is authoritative: routed source == verified source
-        return await dispatch(body)
+        return await dispatch(body, wait)
 
     @app.post(f"{prefix}/webhook", dependencies=[Depends(rate_limit)])
-    async def handle_any_webhook(request: Request) -> JSONResponse:
+    async def handle_any_webhook(request: Request, wait: bool = False) -> JSONResponse:
         """Generic endpoint for webhooks that carry source/type in the body."""
         raw = await _read_body(request)
         body = _parse_body(raw)
@@ -188,7 +245,7 @@ def create_app(
         source = resolve_source(body)
         _verify(source, raw, request)
         body["source"] = source
-        return await dispatch(body)
+        return await dispatch(body, wait)
 
     @app.get(f"{prefix}/workflows", dependencies=read_auth)
     async def list_workflows() -> list[Any]:
