@@ -11,30 +11,37 @@ Python 3.11+, Pydantic v2, FastAPI, async IO.
 ## Setup & commands
 ```bash
 make install                 # uv venv && uv pip install -e ".[dev]"  (do this first)
-make check                   # ruff, black, mypy, bandit, pip-audit, pytest (coverage >= 90%)
+make check                   # ruff, black, mypy, bandit, pip-audit, pytest (>= 90%), validate, eval
+make eval                    # classifier accuracy on evals/tickets.jsonl (offline)
 make test                    # tests only
 make demo                    # offline payment demo
 make benchmark               # writes benchmark_results.json
 uv run etaa server --workflows examples/ --port 8000 --dry-run
 uv run etaa replay data/dlq/payment.jsonl --workflows examples/payment_webhook
+uv run etaa validate examples/
 ```
 There is no system `python3.11`; always go through `uv` / `.venv`, never a hardcoded
 interpreter path.
 
 ## Layout
 - `etaa/models/` — Pydantic schemas (`EventEnvelope`, `WorkflowSpec`, `ActionSpec`, `RetryPolicy`, `DLQConfig`, `RunRecord`).
-- `etaa/engine/` — `EventRouter`, `WorkflowExecutor`, `IdempotencyManager`, `RetryDLQManager`, `dlq.py` (dead-letter store).
+- `etaa/engine/` — `EventRouter`, `WorkflowExecutor`, `IdempotencyManager`, `RetryDLQManager`, `dlq.py` (dead-letter store), `state_store.py` (step checkpoints, inbox).
 - `etaa/ingress/` — normalisation and signature helpers (`__init__.py`), FastAPI server (`webhook_server.py`).
 - `etaa/actions/` — one module per action type (`http.py`, `queue.py`, `function.py`, `ai.py`), shared types in `base.py`.
 - `etaa/templating.py` — placeholder rendering used by every action.
 - `etaa/observability/` — JSON logger, metrics store, run-history store.
-- `etaa/main.py` — `build_application`, workflow loading, CLI (`server`, `run`, `replay`, `list`, `metrics`).
+- `etaa/main.py` — `build_application`, workflow loading, CLI (`server`, `run`, `replay`, `validate`, `list`, `metrics`).
+- `evals/` — labelled tickets and `run_eval.py` for the classifier.
 - `examples/` — three workflows; demos share `examples/demo_support.py` (mock HTTP transport).
 - `tests/` — offline suite; `conftest.py` provides `make_executor` and `app_env`.
 
 ## Repo-specific rules
 - **Idempotency first**: `WorkflowExecutor.run_workflow` claims `(workflow_id, event_id)`
   before any action and releases it when the run fails. Keep both halves.
+- **Resume, do not repeat**: each successful action is checkpointed; a retry skips them
+  (`status="resumed"`). Checkpoints are cleared when the run succeeds.
+- **Acknowledge after recording**: the server puts the event in the `Inbox` before
+  returning `202` and removes it when processing finishes. Never do slow work before the ack.
 - **Never drop a failed event**: every failure path ends in `dlq.write`. A new DLQ target
   must persist or raise; logging alone is not acceptable.
 - **Deterministic core**: retry/backoff maths, DLQ routing, ordering and label validation
@@ -57,7 +64,8 @@ interpreter path.
 | `ETAA_HTTP_ALLOWED_HOSTS`, `ETAA_HTTP_ALLOW_PRIVATE` | Outbound HTTP guard |
 | `ETAA_FUNCTION_ALLOWLIST` | Module prefixes `function` actions may import (default `examples.,etaa.`) |
 | `ETAA_SECRET_*` | The only env vars a workflow can read, via `{{env.ETAA_SECRET_X}}` |
-| `ETAA_IDEMPOTENCY_DB` | SQLite path for a persistent idempotency store |
+| `ETAA_STATE_DB` | SQLite file for idempotency claims, step checkpoints and the inbox |
+| `ETAA_MAX_IN_FLIGHT` | Cap on events being processed in the background (default 1000, then 503) |
 
 ## Gotchas
 - **Singleton stores**: `get_metrics_store()`, `get_run_history()` and
@@ -66,7 +74,10 @@ interpreter path.
 - **Runtime data**: demos, the CLI and the benchmark write under `./data/` (gitignored).
 - **Recursive workflow loading**: `load_workflows(dir)` registers every `*.yaml` under the
   directory.
-- **Replay restarts the workflow** from its first action; actions must be safe to repeat.
+- **Webhook tests**: the default response is `202`; use `?wait=true` when a test needs the
+  run statuses in the response.
+- **Classifier rules are not tuned to `evals/tickets.jsonl`**; do not edit `stub_rules` to
+  raise the score.
 - **Hooks**: a `git commit` command that also contains `-n` anywhere (for example
   `grep -n`) is blocked by the no-verify hook. Run the commit on its own.
 

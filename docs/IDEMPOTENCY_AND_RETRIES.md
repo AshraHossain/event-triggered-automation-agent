@@ -22,9 +22,9 @@ If the key exists in the store, skip execution. This works because:
 
 ETAA implements this in `IdempotencyManager` (default TTL 1 hour). The key is claimed before the run starts, so a concurrent duplicate is skipped, and released if the run fails, so a redelivery or a DLQ replay is processed rather than skipped.
 
-The default store is in-memory. Set `ETAA_IDEMPOTENCY_DB=/path/idempotency.db` for a SQLite store that survives restarts; the claim is an `INSERT OR IGNORE` on a primary key, so it is atomic across processes on one host. For several hosts, back the same interface with Redis `SET NX EX` or a database UNIQUE constraint.
+The default store is in-memory. Set `ETAA_STATE_DB=/path/state.db` for a SQLite store that survives restarts; the claim is an `INSERT OR IGNORE` on a primary key, so it is atomic across processes on one host. For several hosts, back the same interface with Redis `SET NX EX` or a database UNIQUE constraint.
 
-Because a failed run releases its key, a retry re-runs the workflow from its first action: actions should be safe to repeat (at-least-once per action).
+A retry does not start over. Each action that succeeds is checkpointed for its `(workflow_id, event_id)`, and a redelivery or replay skips those actions and resumes at the one that failed, reusing their recorded outputs. Checkpoints are cleared when the run succeeds. The failing action itself is still at-least-once, so downstream calls should accept an idempotency key such as `{{event_id}}`.
 
 ### 2. Retry with Backoff
 
@@ -100,7 +100,8 @@ Run history (`RunHistoryStore`) persists every execution — status, attempts, l
 
 ## Checklist for Production Use
 
-- [x] Persistent idempotency store (`ETAA_IDEMPOTENCY_DB`, SQLite)
+- [x] Persistent idempotency, checkpoints and inbox (`ETAA_STATE_DB`, SQLite)
+- [x] Acknowledge-then-process intake (`202`) with resume after a restart
 - [x] DLQ replay tooling (`etaa replay`)
 - [x] Prometheus metrics endpoint (`/api/v1/metrics/prometheus`)
 - [ ] Shared idempotency store for multi-host deployments (Redis / database)

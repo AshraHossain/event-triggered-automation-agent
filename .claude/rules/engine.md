@@ -5,6 +5,7 @@ paths:
 ---
 # ETAA Engine & Ingress Rules
 1. Claim the idempotency key before any action runs; release it when the run fails.
+   Checkpoint every successful action and skip checkpointed ones on retry.
 2. Keep retry/backoff calculation and DLQ routing deterministic. Delays go through the
    injected `sleep` in `RetryDLQManager`, never a direct `time.sleep`.
 3. A failed event must be persisted by `dlq.write` or the failure must be logged at ERROR
@@ -14,3 +15,5 @@ paths:
 5. Never hardcode webhook secrets. Verify signatures on the raw body before parsing, and use
    `resolve_source` so the verified source is the routed source.
 6. New request guardrails read their limits from `ETAA_*` env vars with a safe default.
+7. The webhook handler records the event in the `Inbox` and returns `202` before running
+   workflows. Do not add awaits on slow work ahead of the acknowledgement.
