@@ -3,6 +3,14 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.0] - 2026-11-16
+
+### Added
+- Durable SQLite queue (`etaa/queues.py`): `publish`, `claim`, `ack`, redelivery of
+  unacked claims, and poison-message handling after five deliveries.
+- `queue` action `backend: sqlite`, and `etaa consume <queue>` to process a queue through
+  workflows (`--once`, `--poll-seconds`, `--dry-run`).
+
 ## [0.2.0] - 2026-11-16
 
 ### Added

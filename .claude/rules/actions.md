@@ -14,6 +14,8 @@ paths:
    template function. Use `url_safe=True` for anything that becomes part of a URL.
 5. Outbound URLs must pass `validate_url`. Do not weaken the private-host block or the
    `ETAA_SECRET_` prefix check.
-6. Register a new kind in `build_application` (`etaa/main.py`), add it to `ActionKind`, and
+6. Queue backends: `memory` and `sqlite` are implemented; `sqs`/`rabbitmq` must keep failing
+   loudly (`retryable=False`) until a real adapter exists. Consumers ack only after processing.
+7. Register a new kind in `build_application` (`etaa/main.py`), add it to `ActionKind`, and
    export it from `etaa/actions/__init__.py`.
-7. The `ai` action's result must pass through `_constrain` when `labels` is set.
+8. The `ai` action's result must pass through `_constrain` when `labels` is set.
