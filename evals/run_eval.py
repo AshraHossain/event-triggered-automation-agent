@@ -32,7 +32,12 @@ RESULTS = ROOT / "results.json"
 DEFAULT_MIN_ACCURACY = 0.6
 
 
-def load_classifier_config(provider: str | None = None, model: str | None = None) -> dict:
+def load_classifier_config(
+    provider: str | None = None,
+    model: str | None = None,
+    base_url: str | None = None,
+    api_key_env: str | None = None,
+) -> dict:
     """Return the AI action config used by the support workflow (optionally overridden)."""
     spec = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     config = next(a["config"] for a in spec["actions"] if a["id"] == "classify_ticket")
@@ -41,6 +46,10 @@ def load_classifier_config(provider: str | None = None, model: str | None = None
         config.pop("model", None)
     if model:
         config = {**config, "model": model}
+    if base_url:
+        config = {**config, "base_url": base_url}
+    if api_key_env:
+        config = {**config, "api_key_env": api_key_env}
     return config
 
 
@@ -114,10 +123,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Evaluate the support-ticket classifier")
     parser.add_argument("--provider", choices=AiAction.PROVIDERS, help="Override the provider")
     parser.add_argument("--model", help="Override the model name")
+    parser.add_argument("--base-url", help="OpenAI-compatible endpoint (e.g. Gemini)")
+    parser.add_argument("--api-key-env", help="Env var holding the key (default OPENAI_API_KEY)")
     parser.add_argument("--min-accuracy", type=float, default=DEFAULT_MIN_ACCURACY)
     args = parser.parse_args()
 
-    config = load_classifier_config(args.provider, args.model)
+    config = load_classifier_config(args.provider, args.model, args.base_url, args.api_key_env)
     report = asyncio.run(evaluate(config, load_dataset()))
     print(format_report(report))
     RESULTS.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

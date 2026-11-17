@@ -123,7 +123,7 @@ class AiAction(BaseAction):
     async def _openai(
         self, cfg: dict[str, Any], model: str, prompt: str, labels: list[str]
     ) -> str:
-        api_key = self._api_key("OPENAI_API_KEY")
+        api_key = self._api_key(str(cfg.get("api_key_env", "OPENAI_API_KEY")))
         try:
             from openai import AsyncOpenAI
         except ImportError as exc:
