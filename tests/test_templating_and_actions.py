@@ -201,6 +201,24 @@ async def test_ai_openai_compatible_key_comes_from_api_key_env(event, monkeypatc
     assert result.response["classification"] == "billing"
 
 
+async def test_ai_openai_response_without_message_is_not_a_crash(event, monkeypatch):
+    class _Completions:
+        async def create(self, **_):
+            return types.SimpleNamespace(choices=[types.SimpleNamespace(message=None)])
+
+    class AsyncOpenAI:
+        def __init__(self, **_):
+            self.chat = types.SimpleNamespace(completions=_Completions())
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(AsyncOpenAI=AsyncOpenAI))
+    action = _ai("openai")
+    config = {k: v for k, v in action.config.items() if k != "default_label"}
+    with pytest.raises(ActionError) as exc:
+        await AiAction().execute(action.model_copy(update={"config": config}), event)
+    assert exc.value.error_code == "invalid_ai_output"
+
+
 async def test_ai_injected_output_cannot_escape_the_label_set(event, monkeypatch):
     """A model talked into returning something else is forced back to the default."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
