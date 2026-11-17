@@ -37,6 +37,7 @@ def load_classifier_config(
     model: str | None = None,
     base_url: str | None = None,
     api_key_env: str | None = None,
+    max_tokens: int | None = None,
 ) -> dict:
     """Return the AI action config used by the support workflow (optionally overridden)."""
     spec = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
@@ -50,6 +51,8 @@ def load_classifier_config(
         config = {**config, "base_url": base_url}
     if api_key_env:
         config = {**config, "api_key_env": api_key_env}
+    if max_tokens:
+        config = {**config, "max_tokens": max_tokens}
     return config
 
 
@@ -125,10 +128,13 @@ def main() -> int:
     parser.add_argument("--model", help="Override the model name")
     parser.add_argument("--base-url", help="OpenAI-compatible endpoint (e.g. Gemini)")
     parser.add_argument("--api-key-env", help="Env var holding the key (default OPENAI_API_KEY)")
+    parser.add_argument("--max-tokens", type=int, help="Raise for reasoning models")
     parser.add_argument("--min-accuracy", type=float, default=DEFAULT_MIN_ACCURACY)
     args = parser.parse_args()
 
-    config = load_classifier_config(args.provider, args.model, args.base_url, args.api_key_env)
+    config = load_classifier_config(
+        args.provider, args.model, args.base_url, args.api_key_env, args.max_tokens
+    )
     report = asyncio.run(evaluate(config, load_dataset()))
     print(format_report(report))
     RESULTS.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

@@ -262,6 +262,11 @@ The `ai` action in the support workflow is scored against 32 labelled tickets
 | Provider | Accuracy | account P / R | billing P / R | technical P / R | general P / R |
 |---|---|---|---|---|---|
 | `stub` (keyword rules, offline) | 20/32 = 62.5% | 1.00 / 0.50 | 1.00 / 0.56 | 1.00 / 0.50 | 0.37 / 1.00 |
+| `gemini-3.8-flash` (Vertex AI, OpenAI-compatible endpoint) | 30/32 = 93.8% | 1.00 / 1.00 | 0.90 / 1.00 | 0.89 / 1.00 | 1.00 / 0.71 |
+
+The Gemini run is a single pass at temperature 0 on a 32-ticket set, so treat it as a
+sanity check, not a benchmark. Its two misses are borderline `general` questions (a
+non-profit discount query went to `billing`, an integrations-docs query to `technical`).
 
 The keyword baseline never assigns a wrong specific label (precision 1.00); everything it
 does not recognise falls back to `general`, which is why recall is about half. The rules
@@ -273,6 +278,9 @@ Score a real model with the same prompt and label set:
 ```bash
 uv pip install -e ".[ai]"
 uv run python -m evals.run_eval --provider anthropic --min-accuracy 0.9   # needs ANTHROPIC_API_KEY
+# Any OpenAI-compatible endpoint (reasoning models need a larger --max-tokens):
+uv run python -m evals.run_eval --provider openai --base-url <endpoint> \
+  --api-key-env <ENV_VAR_WITH_KEY> --model <model> --max-tokens 1024
 ```
 
 ## Security
@@ -331,7 +339,7 @@ curl -X POST http://localhost:8000/api/v1/webhook/stripe \
 | `etaa/observability/` | JSON logger, metrics store, run-history store (JSONL or SQLite) |
 | `examples/` | Three end-to-end workflows with offline demos |
 | `evals/` | Labelled tickets and the classifier evaluation script |
-| `tests/` | 128 offline tests (mocked HTTP, in-memory stores) |
+| `tests/` | 131 offline tests (mocked HTTP, in-memory stores) |
 
 ## Design decisions
 

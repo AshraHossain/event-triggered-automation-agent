@@ -147,7 +147,8 @@ class AiAction(BaseAction):
             raise ActionError(
                 f"OpenAI call failed: {exc}", error_code="ai_provider_error"
             ) from exc
-        return (response.choices[0].message.content or "") if response.choices else ""
+        message = response.choices[0].message if response.choices else None
+        return (getattr(message, "content", None) or "") if message else ""
 
     async def _anthropic(
         self, cfg: dict[str, Any], model: str, prompt: str, labels: list[str]
