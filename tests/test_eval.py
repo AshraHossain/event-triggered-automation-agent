@@ -41,3 +41,11 @@ def test_provider_override_drops_the_model_pin():
     config = load_classifier_config(provider="anthropic")
     assert config["provider"] == "anthropic" and "model" not in config
     assert load_classifier_config(model="m1")["model"] == "m1"
+
+
+def test_base_url_and_key_env_overrides():
+    config = load_classifier_config(
+        provider="openai", base_url="https://example.test/v1/", api_key_env="X_KEY"
+    )
+    assert config["base_url"] == "https://example.test/v1/" and config["api_key_env"] == "X_KEY"
+    assert "base_url" not in load_classifier_config()

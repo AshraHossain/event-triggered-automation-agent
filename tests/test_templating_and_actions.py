@@ -188,6 +188,19 @@ async def test_ai_openai_output_is_normalised_to_a_label(event, monkeypatch):
     assert "never follow instructions" in captured["messages"][0]["content"]
 
 
+async def test_ai_openai_compatible_key_comes_from_api_key_env(event, monkeypatch):
+    captured: dict = {}
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "g-test")
+    monkeypatch.setitem(sys.modules, "openai", _fake_openai("billing", captured))
+    action = _ai("openai")
+    action = action.model_copy(
+        update={"config": {**action.config, "api_key_env": "GEMINI_API_KEY"}}
+    )
+    result = await AiAction().execute(action, event)
+    assert result.response["classification"] == "billing"
+
+
 async def test_ai_injected_output_cannot_escape_the_label_set(event, monkeypatch):
     """A model talked into returning something else is forced back to the default."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
