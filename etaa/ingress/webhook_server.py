@@ -187,7 +187,7 @@ def create_app(
             "Vendor-agnostic event orchestration layer with idempotent "
             "execution, retry logic, and dead-letter handling."
         ),
-        version="0.2.0",
+        version="0.3.0",
         lifespan=lifespan,
     )
 

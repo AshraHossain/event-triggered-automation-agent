@@ -11,7 +11,7 @@ backoff, and a replayable dead-letter queue.
 
 ```bash
 make install && make demo     # offline demo: 2 successes, 1 duplicate skipped, 1 dead-lettered
-make check                    # lint, types, security scan, 120 tests (95% coverage), eval
+make check                    # lint, types, security scan, 128 tests (96% coverage), eval
 ```
 
 ## Architecture
@@ -216,7 +216,20 @@ dlq:
 | `{{steps.<action_id>.<path>}}` | Output of an earlier action in the same run |
 | `{{env.ETAA_SECRET_<NAME>}}` | A secret from the environment (only this prefix is readable) |
 
-Action types: `http`, `queue` (in-memory), `function` (local Python callable), `ai`.
+Action types: `http`, `queue`, `function` (local Python callable), `ai`.
+
+**Queues.** `queue` actions publish to an in-memory list (default) or, with
+`backend: sqlite`, to a durable queue file. `etaa consume <queue> --workflows <dir>` reads
+that queue and runs the matching workflows, so one workflow can feed another, or any process
+can enqueue work:
+
+```bash
+uv run etaa consume fulfilment --db ./data/queues.db --workflows examples/ --once
+```
+
+Delivery is at-least-once: a message is removed only after its workflows finish, an unacked
+claim becomes visible again after 60 s, and a message delivered five times without an ack is
+set aside as a poison message instead of looping.
 
 | Example | Trigger | Actions |
 |---|---|---|
@@ -298,8 +311,9 @@ curl -X POST http://localhost:8000/api/v1/webhook/stripe \
   taken effect. Downstream calls should accept an idempotency key (`{{event_id}}`).
 - **Background runs are sequential per event** and bounded by `ETAA_MAX_IN_FLIGHT`
   (default 1000, then `503`); there is no worker pool or priority queue.
-- **No message-broker adapters yet.** The `queue` action and ingress are in-memory; SQS,
-  Kafka and RabbitMQ are not implemented and fail loudly if configured.
+- **Queues are local.** The durable queue is a SQLite file on one host. SQS, Kafka and
+  RabbitMQ are not implemented and fail loudly if configured; the queue interface
+  (`publish`, `claim`, `ack`) is the seam where a broker adapter would go.
 - **Outbound host check does not resolve DNS.** Use `ETAA_HTTP_ALLOWED_HOSTS` when workflow
   files are not fully trusted.
 - **Encryption at rest, mTLS and secret-manager integration** are left to the platform.
@@ -311,12 +325,13 @@ curl -X POST http://localhost:8000/api/v1/webhook/stripe \
 | `etaa/models/` | Pydantic schemas: `EventEnvelope`, `WorkflowSpec`, `ActionSpec`, `RetryPolicy`, `DLQConfig`, `RunRecord` |
 | `etaa/engine/` | `EventRouter`, `WorkflowExecutor`, `IdempotencyManager`, `RetryDLQManager`, dead-letter store, checkpoints and inbox |
 | `etaa/ingress/` | Webhook/queue normalisation, signature verification, FastAPI server |
+| `etaa/queues.py` | Durable SQLite queue (publish / claim / ack, redelivery, poison messages) |
 | `etaa/actions/` | One module per action type: `http`, `queue`, `function`, `ai` |
 | `etaa/templating.py` | Placeholder rendering shared by all actions |
 | `etaa/observability/` | JSON logger, metrics store, run-history store (JSONL or SQLite) |
 | `examples/` | Three end-to-end workflows with offline demos |
 | `evals/` | Labelled tickets and the classifier evaluation script |
-| `tests/` | 120 offline tests (mocked HTTP, in-memory stores) |
+| `tests/` | 128 offline tests (mocked HTTP, in-memory stores) |
 
 ## Design decisions
 
@@ -328,7 +343,8 @@ curl -X POST http://localhost:8000/api/v1/webhook/stripe \
 | Checkpoint each completed action | A retry must not resend the email that already went out. | The failing action is still at-least-once. |
 | Fail closed on signatures | A forgotten secret for one source should reject traffic, not accept it unsigned. | Unsigned sources must be listed explicitly. |
 | Constrain model output in code | The model proposes a label; code decides what is allowed, so injected text cannot steer later steps. | Free-form model answers are not supported for routing. |
-| SQLite for durable state | Zero infrastructure for a single node; atomic claims via a primary key. | Not a multi-host store. |
+| SQLite for durable state and queues | Zero infrastructure for a single node; atomic claims via a primary key. | Not a multi-host store; no broker features such as fan-out. |
+| Ack after processing, not before | A crash must redeliver the message rather than lose it. | Duplicates are possible, so idempotency and checkpoints are required. |
 | Mock transport instead of a fake server for demos and tests | Deterministic, offline, and exercises the real request-building code. | Does not test DNS, TLS or real latency. |
 
 ## Development

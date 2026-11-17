@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ from .ingress.webhook_server import create_app
 from .models import EventEnvelope, ExecutionStatus, WorkflowSpec
 from .observability.metrics_store import get_metrics_store
 from .observability.run_history_store import get_run_history
+from .queues import SqliteQueue
 
 
 def dry_run_transport() -> httpx.MockTransport:
@@ -142,6 +144,14 @@ def main() -> None:
     val = sub.add_parser("validate", help="Check workflow files without running them")
     val.add_argument("path", help="Workflow YAML file or directory")
 
+    con = sub.add_parser("consume", help="Process messages from a durable queue")
+    con.add_argument("queue", help="Queue name")
+    con.add_argument("--db", default="./data/queues.db", help="Queue SQLite file")
+    con.add_argument("--workflows", required=True, help="Directory with workflow YAML files")
+    con.add_argument("--once", action="store_true", help="Drain the queue and exit")
+    con.add_argument("--poll-seconds", type=float, default=1.0, help="Idle poll interval")
+    con.add_argument("--dry-run", action="store_true", help=dry_help)
+
     lst = sub.add_parser("list", help="List registered workflows")
     lst.add_argument("--workflows", required=True, help="Directory with workflow YAML files")
 
@@ -154,6 +164,8 @@ def main() -> None:
         asyncio.run(_cmd_run(args))
     elif args.command == "replay":
         asyncio.run(_cmd_replay(args))
+    elif args.command == "consume":
+        asyncio.run(_cmd_consume(args))
     elif args.command == "validate":
         raise SystemExit(_cmd_validate(args))
     elif args.command == "list":
@@ -211,6 +223,63 @@ async def replay_dlq(
         counts["succeeded" if result.status == ExecutionStatus.SUCCESS else "failed"] += 1
     dlq_store.drop_first(dlq_path, len(records), table)
     return counts
+
+
+async def consume_queue(
+    executor: WorkflowExecutor,
+    queue: SqliteQueue,
+    *,
+    once: bool = False,
+    poll_seconds: float = 1.0,
+    max_messages: int | None = None,
+) -> dict[str, int]:
+    """Process messages from *queue* through the workflows until stopped.
+
+    A message is acked only after its workflows finished (success, or failure that was
+    dead-lettered), so a crash redelivers it; idempotency and checkpoints make that safe.
+    ``once`` drains the queue and returns; otherwise it polls until cancelled.
+    """
+    ingress = WebhookIngress()
+    counts = {"processed": 0, "failed": 0}
+    while max_messages is None or counts["processed"] < max_messages:
+        batch = queue.claim(limit=10)
+        if not batch:
+            if once:
+                break
+            await asyncio.sleep(poll_seconds)
+            continue
+        for message_id, raw in batch:
+            try:
+                runs = await executor.execute(await ingress.ingest(raw))
+            except Exception:  # keep consuming; the claim expires and is redelivered
+                logging.getLogger(__name__).exception("Message %s failed", message_id)
+                counts["failed"] += 1
+                continue
+            counts["failed"] += any(r.status == ExecutionStatus.FAILED for r in runs)
+            queue.ack(message_id)
+            counts["processed"] += 1
+    return counts
+
+
+async def _cmd_consume(args: argparse.Namespace) -> None:
+    _, _, executor = build_application(workflows_path=args.workflows, dry_run=args.dry_run)
+    queue = SqliteQueue(args.db, args.queue)
+    try:
+        counts = await consume_queue(
+            executor, queue, once=args.once, poll_seconds=args.poll_seconds
+        )
+    finally:
+        queue.close()
+    print(json.dumps({**counts, "dead": len(queue_dead(args.db, args.queue))}, indent=2))
+
+
+def queue_dead(db: str, name: str) -> list[dict]:
+    """Poison messages in *name* (delivered too often without an ack)."""
+    queue = SqliteQueue(db, name)
+    try:
+        return queue.dead_letters()
+    finally:
+        queue.close()
 
 
 async def _cmd_replay(args: argparse.Namespace) -> None:

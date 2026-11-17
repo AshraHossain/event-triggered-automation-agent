@@ -19,6 +19,7 @@ make benchmark               # writes benchmark_results.json
 uv run etaa server --workflows examples/ --port 8000 --dry-run
 uv run etaa replay data/dlq/payment.jsonl --workflows examples/payment_webhook
 uv run etaa validate examples/
+uv run etaa consume <queue> --db ./data/queues.db --workflows examples/ --once
 ```
 There is no system `python3.11`; always go through `uv` / `.venv`, never a hardcoded
 interpreter path.
@@ -30,7 +31,8 @@ interpreter path.
 - `etaa/actions/` — one module per action type (`http.py`, `queue.py`, `function.py`, `ai.py`), shared types in `base.py`.
 - `etaa/templating.py` — placeholder rendering used by every action.
 - `etaa/observability/` — JSON logger, metrics store, run-history store.
-- `etaa/main.py` — `build_application`, workflow loading, CLI (`server`, `run`, `replay`, `validate`, `list`, `metrics`).
+- `etaa/queues.py` — durable SQLite queue (`publish`/`claim`/`ack`, redelivery, poison messages).
+- `etaa/main.py` — `build_application`, workflow loading, CLI (`server`, `run`, `replay`, `consume`, `validate`, `list`, `metrics`).
 - `evals/` — labelled tickets and `run_eval.py` for the classifier.
 - `examples/` — three workflows; demos share `examples/demo_support.py` (mock HTTP transport).
 - `tests/` — offline suite; `conftest.py` provides `make_executor` and `app_env`.
