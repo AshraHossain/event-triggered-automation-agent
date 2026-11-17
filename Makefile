@@ -1,10 +1,10 @@
-.PHONY: install check lint type security test demo benchmark
+.PHONY: install check lint type security test demo benchmark eval validate
 
 install:
 	uv venv && uv pip install -e ".[dev]"
 
 # One command to verify everything CI verifies.
-check: lint type security test
+check: lint type security test validate eval
 
 lint:
 	uv run ruff check .
@@ -25,3 +25,10 @@ demo:
 
 benchmark:
 	uv run python benchmark.py --iterations 20
+
+# Offline classifier baseline against evals/tickets.jsonl (accuracy gate).
+eval:
+	uv run python -m evals.run_eval
+
+validate:
+	uv run etaa validate examples/

@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class BackoffStrategy(StrEnum):
@@ -239,6 +239,30 @@ class WorkflowSpec(BaseModel):
         default_factory=DLQConfig, description="Dead-letter queue configuration."
     )
 
+    @model_validator(mode="after")
+    def _validate_action_graph(self) -> WorkflowSpec:
+        """Reject duplicate ids, unknown dependencies, and cycles at load time."""
+        ids = [a.id for a in self.actions]
+        duplicates = sorted({i for i in ids if ids.count(i) > 1})
+        if duplicates:
+            raise ValueError(f"duplicate action ids: {duplicates}")
+        known = set(ids)
+        for action in self.actions:
+            unknown = sorted(set(action.depends_on) - known)
+            if unknown:
+                raise ValueError(f"action {action.id!r} depends on unknown actions {unknown}")
+        # Kahn's algorithm: anything left over is part of a cycle.
+        pending = {a.id: set(a.depends_on) for a in self.actions}
+        while pending:
+            ready = [i for i, deps in pending.items() if not deps]
+            if not ready:
+                raise ValueError(f"dependency cycle among actions {sorted(pending)}")
+            for i in ready:
+                del pending[i]
+            for deps in pending.values():
+                deps.difference_update(ready)
+        return self
+
     def matches(self, event: EventEnvelope) -> bool:
         """Return True if *event* matches at least one trigger."""
         return any(t.matches(event) for t in self.triggers)
@@ -254,7 +278,7 @@ class AttemptRecord(BaseModel):
     attempt: int
     started_at: datetime
     finished_at: datetime
-    status: str  # "success" | "failed"
+    status: str  # "success" | "failed" | "resumed" (completed by an earlier attempt)
     error: str | None = None
     response: dict[str, Any] | None = None
     dlq_routed: bool = False

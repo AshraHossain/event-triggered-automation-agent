@@ -19,3 +19,4 @@ graphify-out/
 
 uv.lock
 .claude/scheduled_tasks.lock
+evals/results.json

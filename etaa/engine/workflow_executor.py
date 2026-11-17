@@ -21,6 +21,7 @@ from ..observability.run_history_store import RunHistoryStore
 from .event_router import EventRouter
 from .idempotency_manager import IdempotencyManager
 from .retry_dlq_manager import RetryDLQManager
+from .state_store import CheckpointStore
 
 log = setup_logger(__name__)
 
@@ -32,6 +33,7 @@ class WorkflowExecutor:
       - Claim the idempotency key (skip duplicates, release on failure)
       - Resolve action dependencies (topological order)
       - Execute each action with retry + DLQ, passing earlier outputs forward
+      - Checkpoint each completed action so a retry resumes at the failed one
       - Record run history and metrics
 
     Example:
@@ -47,6 +49,7 @@ class WorkflowExecutor:
         history: RunHistoryStore,
         idempotency: IdempotencyManager,
         retry_manager: RetryDLQManager | None = None,
+        checkpoints: CheckpointStore | None = None,
     ) -> None:
         self._router = router
         self._action_factory = action_factory
@@ -54,6 +57,7 @@ class WorkflowExecutor:
         self._history = history
         self._idempotency = idempotency
         self._retry_mgr = retry_manager or RetryDLQManager()
+        self._checkpoints = checkpoints or CheckpointStore()
 
     @property
     def router(self) -> EventRouter:
@@ -115,12 +119,16 @@ class WorkflowExecutor:
     ) -> tuple[ExecutionStatus, list[AttemptRecord]]:
         """Run *ordered* actions, stopping on the first failure."""
         logs: list[AttemptRecord] = []
-        steps: Steps = {}
+        # Actions that succeeded in an earlier, failed attempt at this event.
+        steps: Steps = self._checkpoints.load(wf.id, event.event_id)
 
         async def _execute(action: ActionSpec, evt: EventEnvelope) -> ActionResult:
             return await self._execute_action(action, evt, steps)
 
         for action in ordered:
+            if action.id in steps:
+                logs.append(self._resumed_record(action.id, steps[action.id]))
+                continue
             result = await self._retry_mgr.run_with_retry(
                 action=action,
                 event=event,
@@ -140,9 +148,24 @@ class WorkflowExecutor:
                 )
                 return ExecutionStatus.FAILED, logs
             steps[action.id] = result.response or {}
+            self._checkpoints.save(wf.id, event.event_id, action.id, steps[action.id])
             self._metrics.increment(wf.id, "action_success_count")
 
+        self._checkpoints.clear(wf.id, event.event_id)
         return ExecutionStatus.SUCCESS, logs
+
+    @staticmethod
+    def _resumed_record(action_id: str, response: dict) -> AttemptRecord:
+        """Log entry for an action skipped because an earlier attempt completed it."""
+        now = datetime.now(UTC)
+        return AttemptRecord(
+            action_id=action_id,
+            attempt=0,
+            started_at=now,
+            finished_at=now,
+            status="resumed",
+            response=response,
+        )
 
     def _finalize(
         self,
@@ -172,7 +195,7 @@ class WorkflowExecutor:
 
         self._metrics.record_latency(wf.id, elapsed)
         self._metrics.increment(wf.id, "completed_count")
-        retries = attempts - len(logs)
+        retries = attempts - sum(1 for log_ in logs if log_.attempt > 0)
         if retries > 0:
             self._metrics.increment(wf.id, "retry_count", retries)
         if any(log_.dlq_routed for log_ in logs):
@@ -213,7 +236,7 @@ class WorkflowExecutor:
         for a in actions:
             for dep in a.depends_on:
                 if dep not in by_id:
-                    continue
+                    raise ValueError(f"action {a.id!r} depends on unknown action {dep!r}")
                 children[dep].append(a.id)
                 in_degree[a.id] += 1
 

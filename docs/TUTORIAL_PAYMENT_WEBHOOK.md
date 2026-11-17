@@ -104,7 +104,8 @@ uv run etaa replay data/dlq/payment.jsonl --workflows examples/payment_webhook -
 ```
 
 Replayed records are removed from the file. An event that fails again is dead-lettered
-again, so nothing is lost. A replay re-runs the workflow from its first action.
+again, so nothing is lost. A replay resumes at the action that failed; actions that already
+succeeded are not repeated.
 
 ## Step 4 — Run the Webhook Server (optional)
 
@@ -119,9 +120,14 @@ curl -X POST http://localhost:8000/api/v1/webhook/stripe \
   -H "Content-Type: application/json" \
   -d '{"id":"evt_live_001","type":"payment_succeeded","data":{"customer_email":"u@example.com","amount":5000,"success":true}}'
 
+# → 202 {"event_id":"evt_live_001","status":"accepted","workflows":["payment-webhook"]}
+
 curl http://localhost:8000/api/v1/metrics
 curl http://localhost:8000/api/v1/runs
 ```
+
+The `202` means the event was recorded; the workflow runs in the background. Add
+`?wait=true` to the webhook URL to wait for the result instead.
 
 `--dry-run` validates and renders the HTTP actions without sending them. See the Security
 section of the README for signed requests.

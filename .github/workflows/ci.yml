@@ -44,6 +44,12 @@ jobs:
       - name: Test with coverage gate (>=90%)
         run: uv run pytest -q --cov=etaa --cov-report=term-missing --cov-fail-under=90
 
+      - name: Validate example workflows
+        run: uv run etaa validate examples/
+
+      - name: Classifier evaluation (offline baseline)
+        run: uv run python -m evals.run_eval
+
   docker:
     runs-on: ubuntu-latest
     steps:

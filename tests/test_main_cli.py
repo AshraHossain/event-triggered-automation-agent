@@ -131,3 +131,35 @@ def test_cli_replay_dry_run(tmp_path, monkeypatch, capsys):
     main()
     assert json.loads(capsys.readouterr().out)["succeeded"] == 1
     assert dlq.read_text() == ""
+
+
+def test_cli_validate_ok_and_invalid(workflows_dir, tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["etaa", "validate", str(workflows_dir)])
+    with pytest.raises(SystemExit) as ok:
+        main()
+    assert ok.value.code == 0
+    assert "OK" in capsys.readouterr().out
+
+    bad = tmp_path / "bad"
+    bad.mkdir()
+    (bad / "cycle.yaml").write_text(
+        QUEUE_WF + "    depends_on: [enqueue]\n"  # an action depending on itself
+    )
+    (bad / "broken.yaml").write_text("id: [unclosed")
+    (bad / "dup1.yaml").write_text(QUEUE_WF)
+    (bad / "dup2.yaml").write_text(QUEUE_WF)
+    monkeypatch.setattr("sys.argv", ["etaa", "validate", str(bad)])
+    with pytest.raises(SystemExit) as failed:
+        main()
+    out = capsys.readouterr().out
+    assert failed.value.code == 1
+    assert out.count("INVALID") == 3
+    assert "duplicate workflow id" in out and "cannot depend on itself" in out
+
+
+def test_cli_validate_missing_path(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["etaa", "validate", str(tmp_path / "nope")])
+    with pytest.raises(SystemExit) as failed:
+        main()
+    assert failed.value.code == 1
+    assert "not found" in capsys.readouterr().out

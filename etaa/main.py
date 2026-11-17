@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -15,10 +16,11 @@ from .actions import AiAction, FunctionAction, HttpAction, QueueAction
 from .engine import dlq as dlq_store
 from .engine.event_router import EventRouter
 from .engine.idempotency_manager import get_idempotency_manager
+from .engine.state_store import CheckpointStore, Inbox
 from .engine.workflow_executor import WorkflowExecutor
 from .ingress import WebhookIngress
 from .ingress.webhook_server import create_app
-from .models import EventEnvelope, WorkflowSpec
+from .models import EventEnvelope, ExecutionStatus, WorkflowSpec
 from .observability.metrics_store import get_metrics_store
 from .observability.run_history_store import get_run_history
 
@@ -63,16 +65,19 @@ def build_application(
         "function": FunctionAction(),
         "ai": AiAction(),
     }
+    # One SQLite file holds idempotency claims, step checkpoints and the inbox.
+    state_db = os.environ.get("ETAA_STATE_DB")
     executor = WorkflowExecutor(
         router,
         action_registry.get,
         get_metrics_store(),
         get_run_history(),
         get_idempotency_manager(),
+        checkpoints=CheckpointStore(state_db),
     )
     if workflows_path:
         load_workflows(workflows_path, router)
-    return create_app(executor, router), router, executor
+    return create_app(executor, router, inbox=Inbox(state_db)), router, executor
 
 
 def load_workflows(path: str, router: EventRouter) -> list[WorkflowSpec]:
@@ -134,6 +139,9 @@ def main() -> None:
     rep.add_argument("--table", default=dlq_store.DEFAULT_TABLE, help="Table name (SQLite only)")
     rep.add_argument("--dry-run", action="store_true", help=dry_help)
 
+    val = sub.add_parser("validate", help="Check workflow files without running them")
+    val.add_argument("path", help="Workflow YAML file or directory")
+
     lst = sub.add_parser("list", help="List registered workflows")
     lst.add_argument("--workflows", required=True, help="Directory with workflow YAML files")
 
@@ -146,6 +154,8 @@ def main() -> None:
         asyncio.run(_cmd_run(args))
     elif args.command == "replay":
         asyncio.run(_cmd_replay(args))
+    elif args.command == "validate":
+        raise SystemExit(_cmd_validate(args))
     elif args.command == "list":
         _cmd_list(args)
     elif args.command == "metrics":
@@ -194,8 +204,11 @@ async def replay_dlq(
             payload=evt["payload"],
         )
         result = await executor.run_workflow(wf, event)
+        if result.status == ExecutionStatus.SKIPPED:
+            counts["skipped"] += 1  # already processed (for example a duplicate dead letter)
+            continue
         counts["replayed"] += 1
-        counts["succeeded" if result.status.value == "success" else "failed"] += 1
+        counts["succeeded" if result.status == ExecutionStatus.SUCCESS else "failed"] += 1
     dlq_store.drop_first(dlq_path, len(records), table)
     return counts
 
@@ -204,6 +217,35 @@ async def _cmd_replay(args: argparse.Namespace) -> None:
     _, _, executor = build_application(workflows_path=args.workflows, dry_run=args.dry_run)
     counts = await replay_dlq(executor, args.dlq_path, args.table)
     print(json.dumps(counts, indent=2))
+
+
+def validate_workflows(path: str) -> list[str]:
+    """Return one error message per invalid workflow file under *path* (empty = all valid)."""
+    root = Path(path)
+    if not root.exists():
+        return [f"{path}: not found"]
+    files = [root] if root.is_file() else sorted({*root.rglob("*.yaml"), *root.rglob("*.yml")})
+    errors: list[str] = []
+    seen: dict[str, Path] = {}
+    for file in files:
+        try:
+            spec = _load_single(file)
+        except (yaml.YAMLError, ValueError) as exc:
+            errors.append(f"{file}: {exc}")
+            continue
+        if spec.id in seen:
+            errors.append(f"{file}: duplicate workflow id {spec.id!r} (also in {seen[spec.id]})")
+        seen[spec.id] = file
+    return errors
+
+
+def _cmd_validate(args: argparse.Namespace) -> int:
+    errors = validate_workflows(args.path)
+    for error in errors:
+        print(f"INVALID  {error}")
+    if not errors:
+        print(f"OK  all workflows under {args.path} are valid")
+    return 1 if errors else 0
 
 
 def _cmd_list(args: argparse.Namespace) -> None:

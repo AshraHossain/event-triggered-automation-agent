@@ -100,10 +100,10 @@ _default_manager: IdempotencyManager | None = None
 
 
 def get_idempotency_manager(ttl_seconds: int = DEFAULT_TTL_SECONDS) -> IdempotencyManager:
-    """Return the process-wide manager; ``ETAA_IDEMPOTENCY_DB`` makes it persistent."""
+    """Return the process-wide manager; ``ETAA_STATE_DB`` makes it persistent."""
     global _default_manager
     if _default_manager is None:
         _default_manager = IdempotencyManager(
-            ttl_seconds=ttl_seconds, db_path=os.environ.get("ETAA_IDEMPOTENCY_DB")
+            ttl_seconds=ttl_seconds, db_path=os.environ.get("ETAA_STATE_DB")
         )
     return _default_manager
